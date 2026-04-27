@@ -294,26 +294,51 @@
     text-align: center;
 }
 
+.selectable-message-text {
+    background-color: transparent;
+    border-width: 0;
+    padding: 0;
+    margin: 0;
+    white-space: normal;
+}
+
+.selectable-message-text .unity-base-text-field__input {
+    background-color: transparent;
+    border-width: 0;
+    padding: 0;
+    margin: 0;
+    cursor: text;
+}
+
 /* Message Styling */
 .message-container {
     margin-bottom: 12px;
-    padding: 8px;
-    border-radius: 6px;
+    padding: 10px;
+    border-radius: 8px;
     white-space: normal;
+    min-width: 50px;
 }
 
 .user-message {
     background-color: #007acc;
-    color: white;
     align-self: flex-end;
     margin-left: 20%;
 }
 
+.user-message .selectable-message-text, 
+.user-message .selectable-message-text .unity-base-text-field__input {
+    color: white;
+}
+
 .ai-message {
     background-color: #3e444b;
-    color: #e0e0e0;
     align-self: flex-start;
     margin-right: 20%;
+}
+
+.ai-message .selectable-message-text, 
+.ai-message .selectable-message-text .unity-base-text-field__input {
+    color: #e0e0e0;
 }
 
 .thought-block {

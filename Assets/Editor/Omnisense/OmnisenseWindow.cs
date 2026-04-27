@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.IO;
 using UnityEditor;
@@ -18,6 +19,7 @@ namespace Omnisense
         private Label _placeholderLabel;
         private DropdownField _modelSelector;
         private VisualElement _contextChips;
+        private ChatSession _currentSession;
 
         private VisualElement _commercialSettings;
         private VisualElement _selfhostedSettings;
@@ -103,6 +105,7 @@ namespace Omnisense
 
             // Chat Events
             root.Q<Button>("send-button").clicked += SendMessage;
+            root.Q<Button>("btn-history").clicked += ShowHistory;
             root.Q<Button>("btn-undo").clicked += () => OmnisenseUndoManager.PerformUndo();
             root.Q<Button>("btn-new-chat").clicked += () => {
                 _chatHistory.Clear();
@@ -141,11 +144,14 @@ namespace Omnisense
             LoadSettings();
             root.Q<Button>("btn-save-settings").clicked += SaveSettings;
 
+            // Initialize Session
+            _currentSession = OmnisenseSessionManager.CreateNewSession();
+
             // Initialize Model Selector
             if (_modelSelector != null)
             {
                 _modelSelector.choices = new List<string> { 
-                    "gpt-5.5", "gpt-5.5-mini", "gpt-5.4-mini", "o3-mini",
+                    "gpt-5.5", "gpt-5.4-mini", "o3-mini",
                     "claude-4.7-opus", "claude-4.6-sonnet", "claude-4.5-haiku",
                     "gemini-3.1-pro", "gemini-3.1-flash", "gemini-3.1-flash-lite",
                     "grok-4.3-beta", "grok-4.20-beta-2", "grok-4.20-fast"
@@ -344,20 +350,66 @@ namespace Omnisense
 
         public void AddMessageToChat(string sender, string content)
         {
-            var msg = new Label(content);
-            msg.AddToClassList("message-container");
-            msg.AddToClassList(sender == "User" ? "user-message" : "ai-message");
+            var msgContainer = new VisualElement();
+            msgContainer.AddToClassList("message-container");
+            msgContainer.AddToClassList(sender == "User" ? "user-message" : "ai-message");
 
-            // Handle thought blocks formatting (simple version)
-            if (content.Contains("<thought>"))
+            var textField = new TextField { value = content, isReadOnly = true, multiline = true };
+            textField.AddToClassList("selectable-message-text");
+            msgContainer.Add(textField);
+
+            _chatHistory.Add(msgContainer);
+
+            // Save to current session
+            if (_currentSession != null)
             {
-                // We'll refine this in the Orchestrator/Formatter later
+                _currentSession.messages.Add(new ChatMessage { 
+                    sender = sender, 
+                    content = content, 
+                    timestamp = DateTime.Now.ToString("HH:mm:ss") 
+                });
+                OmnisenseSessionManager.SaveSession(_currentSession);
             }
-
-            _chatHistory.Add(msg);
             
             // Auto-scroll
-            EditorApplication.delayCall += () => _chatHistory.ScrollTo(msg);
+            EditorApplication.delayCall += () => _chatHistory.ScrollTo(msgContainer);
+        }
+
+        private void ShowHistory()
+        {
+            var sessions = OmnisenseSessionManager.GetAllSessions();
+            if (sessions.Count == 0)
+            {
+                Debug.Log("[Omnisense] No chat history found.");
+                return;
+            }
+
+            GenericMenu menu = new GenericMenu();
+            foreach (var session in sessions)
+            {
+                menu.AddItem(new GUIContent($"{session.name}"), false, () => LoadSession(session));
+            }
+            menu.ShowAsContext();
+        }
+
+        private void LoadSession(ChatSession session)
+        {
+            _currentSession = session;
+            _chatHistory.Clear();
+            
+            // Temporary re-add without recursive saving
+            foreach (var msg in session.messages)
+            {
+                var msgContainer = new VisualElement();
+                msgContainer.AddToClassList("message-container");
+                msgContainer.AddToClassList(msg.sender == "User" ? "user-message" : "ai-message");
+
+                var textField = new TextField { value = msg.content, isReadOnly = true, multiline = true };
+                textField.AddToClassList("selectable-message-text");
+                msgContainer.Add(textField);
+
+                _chatHistory.Add(msgContainer);
+            }
         }
 
         private void OnDestroy()
