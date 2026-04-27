@@ -1,0 +1,100 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements" xmlns:uie="UnityEditor.UIElements" editor-extension-mode="True">
+    <ui:VisualElement name="root" class="root-container">
+        <!-- Main Toolbar Tabs -->
+        <ui:VisualElement name="tab-header" class="tab-header">
+            <ui:Button name="tab-chat" text="Chat" class="tab-button active-tab" />
+            <ui:Button name="tab-settings" text="Settings" class="tab-button" />
+            <ui:Button name="tab-context" text="Context" class="tab-button" />
+        </ui:VisualElement>
+
+        <!-- Tab Content Containers -->
+        <ui:VisualElement name="tab-content" class="tab-content">
+            
+            <!-- CHAT TAB -->
+            <ui:VisualElement name="chat-container" class="tab-pane">
+                <ui:VisualElement class="sub-toolbar">
+                    <ui:Label text="Model:" class="toolbar-label" />
+                    <ui:DropdownField name="model-selector" class="toolbar-dropdown" />
+                    <ui:VisualElement class="spacer" />
+                    <ui:Button name="btn-history" text="History" class="toolbar-btn" />
+                    <ui:Button name="btn-new-chat" text="+ New Chat" class="toolbar-btn" />
+                    <ui:Button name="btn-undo" text="Undo" class="toolbar-btn" />
+                </ui:VisualElement>
+
+                <ui:ScrollView name="chat-history" class="chat-history">
+                    <ui:Label text="Welcome to Omnisense AI Agent." class="system-message" />
+                </ui:ScrollView>
+
+                <ui:VisualElement class="plan-area">
+                    <ui:Label text="Current Plan:" class="section-header" />
+                    <ui:VisualElement class="plan-table-header">
+                        <ui:Label text="Task" class="table-col-task" />
+                        <ui:Label text="Status" class="table-col-status" />
+                    </ui:VisualElement>
+                    <ui:ScrollView name="plan-view" class="plan-view">
+                        <!-- Plan items -->
+                    </ui:ScrollView>
+                </ui:VisualElement>
+
+                <ui:VisualElement class="input-section">
+                    <ui:VisualElement name="context-chips-container" class="context-chips-container" />
+                    <ui:VisualElement class="input-container-relative">
+                        <ui:TextField name="chat-input" multiline="true" class="chat-input" />
+                        <ui:Label name="manual-placeholder" text="Describe your task, or ask a question..." class="manual-placeholder" />
+                    </ui:VisualElement>
+                    <ui:VisualElement class="input-footer">
+                        <ui:VisualElement class="spacer" />
+                        <ui:Button name="send-button" text="↑" class="send-button-circular" />
+                    </ui:VisualElement>
+                </ui:VisualElement>
+            </ui:VisualElement>
+
+            <!-- SETTINGS TAB -->
+            <ui:VisualElement name="settings-container" class="tab-pane hidden">
+                <ui:VisualElement class="settings-sub-tabs">
+                    <ui:Button name="settings-tab-commercial" text="Commercial" class="sub-tab-button active-sub-tab" />
+                    <ui:Button name="settings-tab-selfhosted" text="Self-hosted" class="sub-tab-button" />
+                </ui:VisualElement>
+
+                <ui:ScrollView class="settings-scroll">
+                    <ui:VisualElement name="commercial-settings" class="settings-group">
+                        <ui:Label text="OpenAI API Key:" class="field-label" />
+                        <ui:TextField name="openai-key" password="true" class="field-input" />
+                        
+                        <ui:Label text="Anthropic API Key:" class="field-label" />
+                        <ui:TextField name="anthropic-key" password="true" class="field-input" />
+
+                        <ui:Label text="Google Gemini API Key:" class="field-label" />
+                        <ui:TextField name="gemini-key" password="true" class="field-input" />
+
+                        <ui:Label text="Grok (xAI) API Key:" class="field-label" />
+                        <ui:TextField name="grok-key" password="true" class="field-input" />
+                    </ui:VisualElement>
+
+                    <ui:VisualElement name="selfhosted-settings" class="settings-group hidden">
+                        <ui:Label text="Self-hosted settings coming soon..." class="placeholder-text" />
+                    </ui:VisualElement>
+                </ui:ScrollView>
+
+                <ui:Button name="btn-save-settings" text="Save &amp; Apply Settings" class="save-btn" />
+            </ui:VisualElement>
+
+            <!-- CONTEXT TAB -->
+            <ui:VisualElement name="context-container" class="tab-pane hidden">
+                <ui:Label text="Omnisense Context Engine" class="context-header" />
+                <ui:ScrollView class="context-scroll">
+                    <ui:Label text="▼ Project Resources (Assets/)" class="tree-header" />
+                    <ui:VisualElement name="project-tree" class="tree-container">
+                        <!-- Project assets tree -->
+                    </ui:VisualElement>
+
+                    <ui:Label text="▼ Current Scene Tree" class="tree-header" />
+                    <ui:VisualElement name="scene-tree" class="tree-container">
+                        <!-- Scene hierarchy tree -->
+                    </ui:VisualElement>
+                </ui:ScrollView>
+            </ui:VisualElement>
+
+        </ui:VisualElement>
+    </ui:VisualElement>
+</ui:UXML>
