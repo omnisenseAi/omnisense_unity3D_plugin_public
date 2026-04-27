@@ -45,7 +45,12 @@ namespace Omnisense
             var visualTree = AssetDatabase.LoadAssetAtPath<VisualTreeAsset>("Assets/Editor/Omnisense/OmnisenseWindow.uxml");
             if (visualTree == null)
             {
-                root.Add(new Label("Failed to load OmnisenseWindow.uxml"));
+                visualTree = AssetDatabase.LoadAssetAtPath<VisualTreeAsset>("Packages/com.rahul.omnisense/OmnisenseWindow.uxml");
+            }
+
+            if (visualTree == null)
+            {
+                root.Add(new Label("Failed to load OmnisenseWindow.uxml. Please ensure the package is correctly installed."));
                 return;
             }
             
@@ -55,6 +60,11 @@ namespace Omnisense
 
             // Import USS
             var styleSheet = AssetDatabase.LoadAssetAtPath<StyleSheet>("Assets/Editor/Omnisense/OmnisenseWindow.uss");
+            if (styleSheet == null)
+            {
+                styleSheet = AssetDatabase.LoadAssetAtPath<StyleSheet>("Packages/com.rahul.omnisense/OmnisenseWindow.uss");
+            }
+
             if (styleSheet != null)
             {
                 root.styleSheets.Add(styleSheet);

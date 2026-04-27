@@ -8,11 +8,27 @@ using UnityEngine;
 
 namespace Omnisense
 {
+    [InitializeOnLoad]
     public static class MCPServer
     {
         private static HttpListener _listener;
         private static Thread _serverThread;
         private static bool _isRunning = false;
+
+        static MCPServer()
+        {
+            EditorApplication.playModeStateChanged += OnPlayModeStateChanged;
+            EditorApplication.quitting += StopServer;
+        }
+
+        private static void OnPlayModeStateChanged(PlayModeStateChange state)
+        {
+            // Stop server before domain reload
+            if (state == PlayModeStateChange.ExitingEditMode || state == PlayModeStateChange.ExitingPlayMode)
+            {
+                StopServer();
+            }
+        }
         private const string Port = "3000";
 
         [Serializable]
@@ -38,22 +54,49 @@ namespace Omnisense
         {
             if (_isRunning) return;
 
-            try
-            {
-                _listener = new HttpListener();
-                _listener.Prefixes.Add($"http://localhost:{Port}/");
-                _listener.Start();
-                _isRunning = true;
+            int currentPort = 3000;
+            int retriesOnSamePort = 0;
+            bool success = false;
 
-                _serverThread = new Thread(Listen);
-                _serverThread.IsBackground = true;
-                _serverThread.Start();
-
-                Debug.Log($"[Omnisense] MCPServer started on http://localhost:{Port}/");
-            }
-            catch (Exception e)
+            while (!success && currentPort < 3010)
             {
-                Debug.LogError($"[Omnisense] Failed to start MCPServer: {e.Message}");
+                try
+                {
+                    _listener = new HttpListener();
+                    _listener.Prefixes.Add($"http://localhost:{currentPort}/");
+                    _listener.Start();
+                    
+                    _isRunning = true;
+                    _serverThread = new Thread(Listen);
+                    _serverThread.IsBackground = true;
+                    _serverThread.Start();
+                    
+                    Debug.Log($"[Omnisense] MCPServer started on http://localhost:{currentPort}/");
+                    success = true;
+                }
+                catch (HttpListenerException e)
+                {
+                    // Error 10048 (WSAEADDRINUSE) or 32/183 typically mean the port is busy
+                    if (retriesOnSamePort < 3)
+                    {
+                        // The OS often holds the port in a TIME_WAIT state for a second during a Domain Reload (Play mode)
+                        _listener?.Close();
+                        Thread.Sleep(500); // Wait half a second for the OS to release the socket
+                        retriesOnSamePort++;
+                    }
+                    else
+                    {
+                        Debug.LogWarning($"[Omnisense] Port {currentPort} firmly in use (Code: {e.NativeErrorCode}), trying {currentPort + 1}...");
+                        _listener?.Close();
+                        currentPort++;
+                        retriesOnSamePort = 0; // Reset retries for the new port
+                    }
+                }
+                catch (Exception e)
+                {
+                    Debug.LogError($"[Omnisense] Failed to start MCPServer on {currentPort}: {e.Message}");
+                    break;
+                }
             }
         }
 
