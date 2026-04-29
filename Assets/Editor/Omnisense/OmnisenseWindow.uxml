@@ -21,20 +21,22 @@
                     <ui:Button name="btn-undo" text="Undo" class="toolbar-btn" />
                 </ui:VisualElement>
 
-                <ui:ScrollView name="chat-history" class="chat-history">
-                    <ui:Label text="Welcome to Omnisense AI Agent." class="system-message" />
-                </ui:ScrollView>
-
-                <ui:VisualElement class="plan-area">
-                    <ui:Label text="Current Plan:" class="section-header" />
-                    <ui:VisualElement class="plan-table-header">
-                        <ui:Label text="Task" class="table-col-task" />
-                        <ui:Label text="Status" class="table-col-status" />
-                    </ui:VisualElement>
-                    <ui:ScrollView name="plan-view" class="plan-view">
-                        <!-- Plan items -->
+                <ui:TwoPaneSplitView orientation="Vertical" fixed-pane-index="1" fixed-pane-initial-size="150" class="chat-split-view">
+                    <ui:ScrollView name="chat-history" class="chat-history">
+                        <ui:Label text="Welcome to Omnisense AI Agent." class="system-message" />
                     </ui:ScrollView>
-                </ui:VisualElement>
+
+                    <ui:VisualElement class="plan-area">
+                        <ui:Label text="Current Plan:" class="section-header" />
+                        <ui:VisualElement class="plan-table-header">
+                            <ui:Label text="Task" class="table-col-task" />
+                            <ui:Label text="Status" class="table-col-status" />
+                        </ui:VisualElement>
+                        <ui:ScrollView name="plan-view" class="plan-view">
+                            <!-- Plan items -->
+                        </ui:ScrollView>
+                    </ui:VisualElement>
+                </ui:TwoPaneSplitView>
 
                 <ui:VisualElement class="input-section">
                     <ui:VisualElement name="context-chips-container" class="context-chips-container" />

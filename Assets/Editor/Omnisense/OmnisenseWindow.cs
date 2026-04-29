@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text.RegularExpressions;
 using System.IO;
 using UnityEditor;
 using UnityEngine;
@@ -350,14 +351,7 @@ namespace Omnisense
 
         public void AddMessageToChat(string sender, string content)
         {
-            var msgContainer = new VisualElement();
-            msgContainer.AddToClassList("message-container");
-            msgContainer.AddToClassList(sender == "User" ? "user-message" : "ai-message");
-
-            var textField = new TextField { value = content, isReadOnly = true, multiline = true };
-            textField.AddToClassList("selectable-message-text");
-            msgContainer.Add(textField);
-
+            var msgContainer = CreateMessageElement(sender, content);
             _chatHistory.Add(msgContainer);
 
             // Save to current session
@@ -373,6 +367,47 @@ namespace Omnisense
             
             // Auto-scroll
             EditorApplication.delayCall += () => _chatHistory.ScrollTo(msgContainer);
+        }
+
+        private VisualElement CreateMessageElement(string sender, string content)
+        {
+            var msgContainer = new VisualElement();
+            msgContainer.AddToClassList("message-container");
+            msgContainer.AddToClassList(sender == "User" ? "user-message" : "ai-message");
+
+            // Parse for special blocks (thought, observation, code)
+            if (content.Contains("<thought>"))
+            {
+                var match = Regex.Match(content, "<thought>(.*?)</thought>", RegexOptions.Singleline);
+                if (match.Success)
+                {
+                    var thought = new Label(match.Groups[1].Value.Trim());
+                    thought.AddToClassList("thought-block");
+                    msgContainer.Add(thought);
+                    content = content.Replace(match.Value, "").Trim();
+                }
+            }
+
+            if (content.Contains("[Observation]"))
+            {
+                var parts = content.Split(new[] { "[Observation]" }, StringSplitOptions.None);
+                if (parts.Length > 1)
+                {
+                    var observation = new Label(parts[1].Trim());
+                    observation.AddToClassList("observation-block");
+                    msgContainer.Add(observation);
+                    content = parts[0].Trim();
+                }
+            }
+
+            if (!string.IsNullOrEmpty(content))
+            {
+                var textField = new TextField { value = content, isReadOnly = true, multiline = true };
+                textField.AddToClassList("selectable-message-text");
+                msgContainer.Add(textField);
+            }
+
+            return msgContainer;
         }
 
         private void ShowHistory()
@@ -397,18 +432,16 @@ namespace Omnisense
             _currentSession = session;
             _chatHistory.Clear();
             
-            // Temporary re-add without recursive saving
+            VisualElement last = null;
             foreach (var msg in session.messages)
             {
-                var msgContainer = new VisualElement();
-                msgContainer.AddToClassList("message-container");
-                msgContainer.AddToClassList(msg.sender == "User" ? "user-message" : "ai-message");
+                last = CreateMessageElement(msg.sender, msg.content);
+                _chatHistory.Add(last);
+            }
 
-                var textField = new TextField { value = msg.content, isReadOnly = true, multiline = true };
-                textField.AddToClassList("selectable-message-text");
-                msgContainer.Add(textField);
-
-                _chatHistory.Add(msgContainer);
+            if (last != null) 
+            {
+                EditorApplication.delayCall += () => _chatHistory.ScrollTo(last);
             }
         }
 
