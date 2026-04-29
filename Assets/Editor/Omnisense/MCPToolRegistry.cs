@@ -6,8 +6,29 @@ using UnityEngine;
 
 namespace Omnisense
 {
+    [InitializeOnLoad]
     public static class MCPToolRegistry
     {
+        private static List<string> _consoleLogs = new List<string>();
+
+        static MCPToolRegistry()
+        {
+            Application.logMessageReceived += HandleLog;
+        }
+
+        private static void HandleLog(string logString, string stackTrace, LogType type)
+        {
+            // Only capture errors, exceptions, and warnings to reduce noise
+            if (type == LogType.Error || type == LogType.Exception || type == LogType.Warning)
+            {
+                if (logString.StartsWith("[Omnisense]")) return; // Ignore our own debug logs
+
+                string logEntry = $"[{type}] {logString}";
+                _consoleLogs.Add(logEntry);
+                if (_consoleLogs.Count > 30) _consoleLogs.RemoveAt(0); // Keep last 30 logs
+            }
+        }
+
         [Serializable]
         public class ToolResult
         {
@@ -16,8 +37,18 @@ namespace Omnisense
             public string error;
         }
 
+        public static ToolResult ReadConsole()
+        {
+            Debug.Log($"[Omnisense] Tool: ReadConsole()");
+            if (_consoleLogs.Count == 0) return new ToolResult { success = true, observation = "Console is empty (no recent errors or warnings)." };
+            
+            string logs = string.Join("\n", _consoleLogs);
+            return new ToolResult { success = true, observation = $"Recent Console Logs (Errors/Warnings):\n{logs}" };
+        }
+
         public static ToolResult ListDirectory(string path)
         {
+            Debug.Log($"[Omnisense] Tool: ListDirectory(path='{path}')");
             try
             {
                 string fullPath = Path.Combine(Application.dataPath, "..", path);
@@ -47,6 +78,7 @@ namespace Omnisense
 
         public static ToolResult InstantiateNode(string type, string name, string parentPath = null)
         {
+            Debug.Log($"[Omnisense] Tool: InstantiateNode(type='{type}', name='{name}', parent='{parentPath}')");
             // Note: This MUST be called on the main thread
             try
             {
@@ -111,6 +143,7 @@ namespace Omnisense
 
         public static ToolResult WriteFile(string path, string content)
         {
+            Debug.Log($"[Omnisense] Tool: WriteFile(path='{path}')");
             try
             {
                 string fullPath = Path.Combine(Application.dataPath, "..", path);
@@ -137,6 +170,7 @@ namespace Omnisense
 
         public static ToolResult ModifyNode(string path, string property, string value)
         {
+            Debug.Log($"[Omnisense] Tool: ModifyNode(path='{path}', property='{property}', value='{value}')");
             // Must be called on main thread
             try
             {
@@ -170,7 +204,11 @@ namespace Omnisense
 
                     if (componentType != null)
                     {
-                        Undo.AddComponent(obj, componentType);
+                        var comp = Undo.AddComponent(obj, componentType);
+                        if (comp == null)
+                        {
+                            return new ToolResult { success = false, error = $"Failed to add component '{value}'. It may conflict with existing components (e.g., trying to add 2D physics to 3D Rigidbody)." };
+                        }
                         return new ToolResult { success = true, observation = $"Added component {value} to {path}" };
                     }
                     else
@@ -202,6 +240,7 @@ namespace Omnisense
 
         public static ToolResult InspectNode(string path)
         {
+            Debug.Log($"[Omnisense] Tool: InspectNode(path='{path}')");
             try
             {
                 string searchPath = path.StartsWith("/") ? path.Substring(1) : path;

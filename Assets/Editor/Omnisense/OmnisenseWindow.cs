@@ -337,6 +337,7 @@ namespace Omnisense
         {
             string text = _chatInput.value.Trim();
             if (string.IsNullOrEmpty(text)) return;
+            Debug.Log("[Omnisense] User sent a message.");
 
             // Gather context from chips
             string contextText = "";
@@ -404,6 +405,7 @@ namespace Omnisense
 
         private void OnAttachClicked()
         {
+            Debug.Log("[Omnisense] Attachment button clicked.");
             string path = EditorUtility.OpenFilePanel("Attach File", "Assets", "");
             if (!string.IsNullOrEmpty(path))
             {
@@ -418,6 +420,7 @@ namespace Omnisense
         private void AddContextChipByPath(string fullPath, string displayName = null)
         {
             if (string.IsNullOrEmpty(displayName)) displayName = Path.GetFileName(fullPath);
+            Debug.Log($"[Omnisense] Adding context chip: {fullPath}");
 
             var chip = new VisualElement();
             chip.style.flexDirection = FlexDirection.Row;
@@ -468,6 +471,7 @@ namespace Omnisense
 
         public void AddMessageToChat(string sender, string content)
         {
+            Debug.Log($"[Omnisense] Adding message from {sender} to chat UI.");
             var msgContainer = CreateMessageElement(sender, content);
             _chatHistory.Add(msgContainer);
 

@@ -61,11 +61,13 @@ Available Tools:
 3. scene/instantiate_node (params: ""type"", ""name"") - Creates a GameObject. 'type' can be a primitive (Cube, Sphere) or 'GameObject' for empty.
 4. scene/modify_node (params: ""path"", ""property"", ""value"") - Edits a GameObject. 'property' can be 'name', 'position', 'add_component', or 'remove_component' (where value is component class name).
 5. scene/inspect_node (params: ""path"") - Returns the object's position and a list of all attached components.
+6. editor/read_console (params: none) - Returns the latest 30 warnings and errors from the Unity Console. Use this to debug failing code or conflicting components!
 
 Wait for the [Observation] from the system before proceeding.";
 
         public void ProcessPrompt(string prompt, string model, Action<string, bool> onComplete)
         {
+            Debug.Log($"[Omnisense] Processing prompt with model: {model}");
             if (_history.Count == 0)
             {
                 _history.Add(new ChatMessage { role = "system", content = SYSTEM_PROMPT });
@@ -102,6 +104,7 @@ Wait for the [Observation] from the system before proceeding.";
             }
             else
             {
+                Debug.LogError($"[Omnisense] Unsupported model selected: {model}");
                 onComplete?.Invoke($"Error: Unsupported model {model}", true);
             }
         }
@@ -118,16 +121,19 @@ Wait for the [Observation] from the system before proceeding.";
             webRequest.SetRequestHeader("Content-Type", "application/json");
             webRequest.SetRequestHeader("Authorization", "Bearer " + apiKey);
 
+            Debug.Log($"[Omnisense] Sending request to OpenAI API using model {model}...");
             var operation = webRequest.SendWebRequest();
             operation.completed += (op) =>
             {
                 if (webRequest.result == UnityWebRequest.Result.Success)
                 {
+                    Debug.Log("[Omnisense] Received successful response from API.");
                     string responseText = ExtractContent(webRequest.downloadHandler.text);
                     HandleResponse(responseText, model, onComplete);
                 }
                 else
                 {
+                    Debug.LogError($"[Omnisense] API Error: {webRequest.error}");
                     onComplete?.Invoke($"API Error: {webRequest.error}\n{webRequest.downloadHandler.text}", true);
                 }
                 webRequest.Dispose();
@@ -196,12 +202,17 @@ Wait for the [Observation] from the system before proceeding.";
                         string path = ExtractParam(toolJson, "path");
                         result = MCPToolRegistry.InspectNode(path);
                     }
+                    else if (toolCall.method == "editor/read_console")
+                    {
+                        result = MCPToolRegistry.ReadConsole();
+                    }
                     else
                     {
                         result = new MCPToolRegistry.ToolResult { success = false, error = "Unknown tool: " + toolCall.method };
                     }
 
                     string observation = result.success ? result.observation : $"Error: {result.error}";
+                    Debug.Log($"[Omnisense] Tool Result: {(result.success ? "Success" : "Failed")}. Observation added to history.");
                     _history.Add(new ChatMessage { role = "user", content = $"[Observation]\n{observation}" });
                     
                     // Recursive ReAct Loop
@@ -209,12 +220,14 @@ Wait for the [Observation] from the system before proceeding.";
                 }
                 catch (Exception e)
                 {
+                    Debug.LogError($"[Omnisense] Error parsing tool call: {e.Message}");
                     _history.Add(new ChatMessage { role = "user", content = $"[Observation]\nError parsing tool call: {e.Message}" });
                     ExecuteRequest(model, onComplete);
                 }
             }
             else
             {
+                Debug.Log("[Omnisense] Final response received. Loop complete.");
                 onComplete?.Invoke(response, true);
             }
         }
