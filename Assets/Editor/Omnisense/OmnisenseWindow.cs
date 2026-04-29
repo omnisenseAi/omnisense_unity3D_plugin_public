@@ -111,6 +111,9 @@ namespace Omnisense
             _tabSelfhosted.clicked += () => SwitchSettingsTab("selfhosted");
 
             // Chat Events
+            var btnAttach = root.Q<Button>("btn-attach");
+            if (btnAttach != null) btnAttach.clicked += OnAttachClicked;
+
             root.Q<Button>("send-button").clicked += SendMessage;
             root.Q<Button>("btn-history").clicked += ShowHistory;
             root.Q<Button>("btn-undo").clicked += () => OmnisenseUndoManager.PerformUndo();
@@ -130,6 +133,22 @@ namespace Omnisense
                         SendMessage();
                         evt.StopPropagation();
                         evt.PreventDefault();
+                    }
+                }
+            });
+
+            root.RegisterCallback<KeyDownEvent>(evt => {
+                if (evt.actionKey && evt.keyCode == KeyCode.V)
+                {
+                    string paste = EditorGUIUtility.systemCopyBuffer;
+                    if (!string.IsNullOrEmpty(paste))
+                    {
+                        if (File.Exists(paste) || Directory.Exists(paste))
+                        {
+                            AddContextChipByPath(paste);
+                            evt.StopPropagation();
+                            evt.PreventDefault();
+                        }
                     }
                 }
             });
@@ -163,7 +182,14 @@ namespace Omnisense
                     "gemini-3.1-pro", "gemini-3.1-flash", "gemini-3.1-flash-lite",
                     "grok-4.3-beta", "grok-4.20-beta-2", "grok-4.20-fast"
                 };
-                _modelSelector.value = "gpt-5.5";
+                
+                string savedModel = EditorPrefs.GetString("Omnisense_SelectedModel", "gpt-5.5");
+                if (_modelSelector.choices.Contains(savedModel)) _modelSelector.value = savedModel;
+                else _modelSelector.value = "gpt-5.5";
+
+                _modelSelector.RegisterValueChangedCallback(evt => {
+                    EditorPrefs.SetString("Omnisense_SelectedModel", evt.newValue);
+                });
             }
 
             // Initial refresh
@@ -327,7 +353,7 @@ namespace Omnisense
             _loadingIndicator = new Label("⠋ Thinking...");
             _loadingIndicator.AddToClassList("system-message");
             _chatHistory.Add(_loadingIndicator);
-            _chatHistory.ScrollTo(_loadingIndicator);
+            SafeScrollTo(_loadingIndicator);
             EditorApplication.update += UpdateSpinner;
 
             AIOrchestrator.Instance.ProcessPrompt(contextText + text, _modelSelector.value, (response, isFinal) => {
@@ -372,28 +398,46 @@ namespace Omnisense
                 string path = AssetDatabase.GetAssetPath(obj);
                 bool isSceneObj = string.IsNullOrEmpty(path);
                 string fullPath = isSceneObj ? GetGameObjectPath((GameObject)obj) : path;
-                string displayName = isSceneObj ? obj.name : Path.GetFileName(path);
-
-                var chip = new VisualElement();
-                chip.style.flexDirection = FlexDirection.Row;
-                chip.AddToClassList("context-chip");
-                chip.userData = fullPath;
-                chip.tooltip = fullPath;
-
-                var btnPing = new Button { text = displayName };
-                btnPing.style.backgroundColor = Color.clear;
-                btnPing.style.color = Color.white;
-                btnPing.clicked += () => PingObjectByPath(fullPath);
-
-                var btnClose = new Button { text = "x" };
-                btnClose.style.backgroundColor = Color.clear;
-                btnClose.style.color = Color.white;
-                btnClose.clicked += () => _contextChips.Remove(chip);
-
-                chip.Add(btnPing);
-                chip.Add(btnClose);
-                _contextChips.Add(chip);
+                AddContextChipByPath(fullPath, isSceneObj ? obj.name : Path.GetFileName(path));
             }
+        }
+
+        private void OnAttachClicked()
+        {
+            string path = EditorUtility.OpenFilePanel("Attach File", "Assets", "");
+            if (!string.IsNullOrEmpty(path))
+            {
+                // Make path relative to project folder if inside it
+                if (path.StartsWith(Application.dataPath)) {
+                    path = "Assets" + path.Substring(Application.dataPath.Length);
+                }
+                AddContextChipByPath(path, Path.GetFileName(path));
+            }
+        }
+
+        private void AddContextChipByPath(string fullPath, string displayName = null)
+        {
+            if (string.IsNullOrEmpty(displayName)) displayName = Path.GetFileName(fullPath);
+
+            var chip = new VisualElement();
+            chip.style.flexDirection = FlexDirection.Row;
+            chip.AddToClassList("context-chip");
+            chip.userData = fullPath;
+            chip.tooltip = fullPath;
+
+            var btnPing = new Button { text = displayName };
+            btnPing.style.backgroundColor = Color.clear;
+            btnPing.style.color = Color.white;
+            btnPing.clicked += () => PingObjectByPath(fullPath);
+
+            var btnClose = new Button { text = "x" };
+            btnClose.style.backgroundColor = Color.clear;
+            btnClose.style.color = Color.white;
+            btnClose.clicked += () => _contextChips.Remove(chip);
+
+            chip.Add(btnPing);
+            chip.Add(btnClose);
+            _contextChips.Add(chip);
         }
 
         private string GetGameObjectPath(GameObject obj)
@@ -439,7 +483,18 @@ namespace Omnisense
             }
             
             // Auto-scroll
-            EditorApplication.delayCall += () => _chatHistory.ScrollTo(msgContainer);
+            SafeScrollTo(msgContainer);
+        }
+
+        private void SafeScrollTo(VisualElement target)
+        {
+            if (target == null || _chatHistory == null) return;
+            EditorApplication.delayCall += () => {
+                if (_chatHistory != null && target != null && _chatHistory.Contains(target))
+                {
+                    try { _chatHistory.ScrollTo(target); } catch { }
+                }
+            };
         }
 
         private VisualElement CreateMessageElement(string sender, string content)

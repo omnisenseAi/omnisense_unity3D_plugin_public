@@ -45,6 +45,7 @@
                         <ui:Label name="manual-placeholder" text="Describe your task, or ask a question..." class="manual-placeholder" />
                     </ui:VisualElement>
                     <ui:VisualElement class="input-footer">
+                        <ui:Button name="btn-attach" text="📎" class="attach-button" tooltip="Attach file to context" />
                         <ui:VisualElement class="spacer" />
                         <ui:Button name="send-button" text="↑" class="send-button-circular" />
                     </ui:VisualElement>

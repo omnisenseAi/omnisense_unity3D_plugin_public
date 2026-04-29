@@ -59,7 +59,8 @@ Available Tools:
 1. project/list_directory (params: ""path"") - Lists files.
 2. project/write_file (params: ""path"", ""content"") - Creates/overwrites a file.
 3. scene/instantiate_node (params: ""type"", ""name"") - Creates a GameObject. 'type' can be a primitive (Cube, Sphere) or 'GameObject' for empty.
-4. scene/modify_node (params: ""path"", ""property"", ""value"") - Edits a GameObject. 'property' can be 'name', 'position', or 'add_component' (where value is component class name like 'SpriteRenderer' or 'PlayerMovement').
+4. scene/modify_node (params: ""path"", ""property"", ""value"") - Edits a GameObject. 'property' can be 'name', 'position', 'add_component', or 'remove_component' (where value is component class name).
+5. scene/inspect_node (params: ""path"") - Returns the object's position and a list of all attached components.
 
 Wait for the [Observation] from the system before proceeding.";
 
@@ -189,6 +190,11 @@ Wait for the [Observation] from the system before proceeding.";
                         string prop = ExtractParam(toolJson, "property");
                         string val = ExtractParam(toolJson, "value");
                         result = MCPToolRegistry.ModifyNode(path, prop, val);
+                    }
+                    else if (toolCall.method == "scene/inspect_node")
+                    {
+                        string path = ExtractParam(toolJson, "path");
+                        result = MCPToolRegistry.InspectNode(path);
                     }
                     else
                     {

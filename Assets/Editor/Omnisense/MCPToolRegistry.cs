@@ -140,8 +140,10 @@ namespace Omnisense
             // Must be called on main thread
             try
             {
-                GameObject obj = GameObject.Find(path);
-                if (obj == null) return new ToolResult { success = false, error = $"Object not found: {path}" };
+                // GameObject.Find doesn't like leading slashes for root objects
+                string searchPath = path.StartsWith("/") ? path.Substring(1) : path;
+                GameObject obj = GameObject.Find(searchPath);
+                if (obj == null) return new ToolResult { success = false, error = $"Object not found at path: {searchPath} (original: {path})" };
 
                 Undo.RecordObject(obj.transform, "Modify via Omnisense");
 
@@ -160,8 +162,10 @@ namespace Omnisense
                     Type componentType = null;
                     foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
                     {
-                        componentType = Array.Find(assembly.GetTypes(), t => t.Name == value);
-                        if (componentType != null) break;
+                        try {
+                            componentType = Array.Find(assembly.GetTypes(), t => t.Name == value);
+                            if (componentType != null) break;
+                        } catch { continue; }
                     }
 
                     if (componentType != null)
@@ -174,8 +178,49 @@ namespace Omnisense
                         return new ToolResult { success = false, error = $"Component type '{value}' not found in any loaded assembly." };
                     }
                 }
+                else if (property.ToLower() == "remove_component")
+                {
+                    var component = obj.GetComponent(value);
+                    if (component != null)
+                    {
+                        Undo.DestroyObjectImmediate(component);
+                        return new ToolResult { success = true, observation = $"Removed component {value} from {path}" };
+                    }
+                    else
+                    {
+                        return new ToolResult { success = false, error = $"Component {value} not found on {path}" };
+                    }
+                }
 
                 return new ToolResult { success = true, observation = $"Modified {property} of {path} to {value}" };
+            }
+            catch (Exception e)
+            {
+                return new ToolResult { success = false, error = e.Message };
+            }
+        }
+
+        public static ToolResult InspectNode(string path)
+        {
+            try
+            {
+                string searchPath = path.StartsWith("/") ? path.Substring(1) : path;
+                GameObject obj = GameObject.Find(searchPath);
+                if (obj == null) return new ToolResult { success = false, error = $"Object not found: {searchPath}" };
+
+                var components = obj.GetComponents<Component>();
+                List<string> compDetails = new List<string>();
+                foreach (var comp in components)
+                {
+                    if (comp == null) continue;
+                    compDetails.Add(comp.GetType().Name);
+                }
+
+                return new ToolResult 
+                { 
+                    success = true, 
+                    observation = $"GameObject '{obj.name}' at position {obj.transform.position}. Attached Components: " + string.Join(", ", compDetails) 
+                };
             }
             catch (Exception e)
             {
