@@ -304,6 +304,7 @@
     padding: 0;
     margin: 0;
     white-space: normal;
+    flex-grow: 1;
 }
 
 .selectable-message-text .unity-base-text-field__input {
@@ -312,6 +313,7 @@
     padding: 0;
     margin: 0;
     cursor: text;
+    white-space: normal;
 }
 
 /* Message Styling */
@@ -354,6 +356,7 @@
     padding: 5px 10px;
     margin-bottom: 5px;
     -unity-font-style: italic;
+    white-space: normal;
 }
 
 .observation-block {
@@ -364,4 +367,5 @@
     font-size: 11px;
     padding: 5px 10px;
     margin-bottom: 5px;
+    white-space: normal;
 }
