@@ -155,6 +155,25 @@ namespace Omnisense
                 {
                     obj.name = value;
                 }
+                else if (property.ToLower() == "add_component")
+                {
+                    Type componentType = null;
+                    foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+                    {
+                        componentType = Array.Find(assembly.GetTypes(), t => t.Name == value);
+                        if (componentType != null) break;
+                    }
+
+                    if (componentType != null)
+                    {
+                        Undo.AddComponent(obj, componentType);
+                        return new ToolResult { success = true, observation = $"Added component {value} to {path}" };
+                    }
+                    else
+                    {
+                        return new ToolResult { success = false, error = $"Component type '{value}' not found in any loaded assembly." };
+                    }
+                }
 
                 return new ToolResult { success = true, observation = $"Modified {property} of {path} to {value}" };
             }

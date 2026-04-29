@@ -22,6 +22,12 @@ namespace Omnisense
         private VisualElement _contextChips;
         private ChatSession _currentSession;
 
+        // Spinner state
+        private Label _loadingIndicator;
+        private string[] _spinnerFrames = new[] { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" };
+        private int _spinnerIndex = 0;
+        private double _lastSpinnerTime = 0;
+
         private VisualElement _commercialSettings;
         private VisualElement _selfhostedSettings;
 
@@ -310,15 +316,40 @@ namespace Omnisense
             string contextText = "";
             foreach (var chip in _contextChips.Children())
             {
-                if (chip is Button b) contextText += $"[Context: {b.text}]\n";
+                if (chip.userData is string fullPath) contextText += $"[Context: {fullPath}]\n";
             }
+            _contextChips.Clear(); // Ephemeral context - clear after sending
 
-            AddMessageToChat("User", text);
+            AddMessageToChat("User", contextText + text);
             _chatInput.value = "";
             
-            AIOrchestrator.Instance.ProcessPrompt(contextText + text, _modelSelector.value, (response) => {
+            // Add Loading Spinner
+            _loadingIndicator = new Label("⠋ Thinking...");
+            _loadingIndicator.AddToClassList("system-message");
+            _chatHistory.Add(_loadingIndicator);
+            _chatHistory.ScrollTo(_loadingIndicator);
+            EditorApplication.update += UpdateSpinner;
+
+            AIOrchestrator.Instance.ProcessPrompt(contextText + text, _modelSelector.value, (response, isFinal) => {
+                if (isFinal && _loadingIndicator != null)
+                {
+                    if (_chatHistory.Contains(_loadingIndicator)) _chatHistory.Remove(_loadingIndicator);
+                    EditorApplication.update -= UpdateSpinner;
+                    _loadingIndicator = null;
+                }
                 AddMessageToChat("AI", response);
             });
+        }
+
+        private void UpdateSpinner()
+        {
+            if (_loadingIndicator == null) return;
+            if (EditorApplication.timeSinceStartup - _lastSpinnerTime > 0.1)
+            {
+                _spinnerIndex = (_spinnerIndex + 1) % _spinnerFrames.Length;
+                _loadingIndicator.text = $"{_spinnerFrames[_spinnerIndex]} Thinking...";
+                _lastSpinnerTime = EditorApplication.timeSinceStartup;
+            }
         }
 
         private void OnDragEnter(DragEnterEvent evt) { }
@@ -339,13 +370,55 @@ namespace Omnisense
 
                 // Check if it's a file or a scene object
                 string path = AssetDatabase.GetAssetPath(obj);
-                string displayName = string.IsNullOrEmpty(path) ? obj.name : Path.GetFileName(path);
+                bool isSceneObj = string.IsNullOrEmpty(path);
+                string fullPath = isSceneObj ? GetGameObjectPath((GameObject)obj) : path;
+                string displayName = isSceneObj ? obj.name : Path.GetFileName(path);
 
-                var chip = new Button { text = displayName };
+                var chip = new VisualElement();
+                chip.style.flexDirection = FlexDirection.Row;
                 chip.AddToClassList("context-chip");
-                chip.tooltip = string.IsNullOrEmpty(path) ? "Scene Object" : path;
-                chip.clicked += () => _contextChips.Remove(chip);
+                chip.userData = fullPath;
+                chip.tooltip = fullPath;
+
+                var btnPing = new Button { text = displayName };
+                btnPing.style.backgroundColor = Color.clear;
+                btnPing.style.color = Color.white;
+                btnPing.clicked += () => PingObjectByPath(fullPath);
+
+                var btnClose = new Button { text = "x" };
+                btnClose.style.backgroundColor = Color.clear;
+                btnClose.style.color = Color.white;
+                btnClose.clicked += () => _contextChips.Remove(chip);
+
+                chip.Add(btnPing);
+                chip.Add(btnClose);
                 _contextChips.Add(chip);
+            }
+        }
+
+        private string GetGameObjectPath(GameObject obj)
+        {
+            string path = obj.name;
+            Transform parent = obj.transform.parent;
+            while (parent != null)
+            {
+                path = parent.name + "/" + path;
+                parent = parent.parent;
+            }
+            return "/" + path;
+        }
+
+        private void PingObjectByPath(string path)
+        {
+            if (path.StartsWith("Assets/"))
+            {
+                var obj = AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(path);
+                if (obj != null) { EditorGUIUtility.PingObject(obj); Selection.activeObject = obj; }
+            }
+            else
+            {
+                var obj = GameObject.Find(path);
+                if (obj != null) { EditorGUIUtility.PingObject(obj); Selection.activeGameObject = obj; }
             }
         }
 
@@ -398,6 +471,31 @@ namespace Omnisense
                     msgContainer.Add(observation);
                     content = parts[0].Trim();
                 }
+            }
+
+            // Parse for Context links
+            var contextMatches = Regex.Matches(content, @"\[Context: (.*?)\]");
+            if (contextMatches.Count > 0)
+            {
+                var contextRow = new VisualElement();
+                contextRow.style.flexDirection = FlexDirection.Row;
+                contextRow.style.flexWrap = Wrap.Wrap;
+                contextRow.style.marginBottom = 5;
+
+                foreach (Match match in contextMatches)
+                {
+                    string fullPath = match.Groups[1].Value;
+                    string displayName = fullPath.StartsWith("/") ? fullPath.Substring(fullPath.LastIndexOf('/') + 1) : Path.GetFileName(fullPath);
+
+                    var chip = new Button { text = "📎 " + displayName };
+                    chip.AddToClassList("context-chip");
+                    chip.tooltip = fullPath;
+                    chip.clicked += () => PingObjectByPath(fullPath);
+                    contextRow.Add(chip);
+
+                    content = content.Replace(match.Value, "").Trim();
+                }
+                msgContainer.Add(contextRow);
             }
 
             if (!string.IsNullOrEmpty(content))

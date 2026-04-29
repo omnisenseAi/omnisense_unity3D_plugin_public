@@ -58,11 +58,12 @@ You have access to the following MCP tools. To use a tool, output exactly this f
 Available Tools:
 1. project/list_directory (params: ""path"") - Lists files.
 2. project/write_file (params: ""path"", ""content"") - Creates/overwrites a file.
-3. scene/instantiate_node (params: ""type"", ""name"") - Creates a GameObject.
+3. scene/instantiate_node (params: ""type"", ""name"") - Creates a GameObject. 'type' can be a primitive (Cube, Sphere) or 'GameObject' for empty.
+4. scene/modify_node (params: ""path"", ""property"", ""value"") - Edits a GameObject. 'property' can be 'name', 'position', or 'add_component' (where value is component class name like 'SpriteRenderer' or 'PlayerMovement').
 
 Wait for the [Observation] from the system before proceeding.";
 
-        public void ProcessPrompt(string prompt, string model, Action<string> onComplete)
+        public void ProcessPrompt(string prompt, string model, Action<string, bool> onComplete)
         {
             if (_history.Count == 0)
             {
@@ -72,12 +73,12 @@ Wait for the [Observation] from the system before proceeding.";
             ExecuteRequest(model, onComplete);
         }
 
-        private void ExecuteRequest(string model, Action<string> onComplete)
+        private void ExecuteRequest(string model, Action<string, bool> onComplete)
         {
             string apiKey = GetApiKey(model);
             if (string.IsNullOrEmpty(apiKey))
             {
-                onComplete?.Invoke("Error: API Key missing. Please set it in the Settings tab.");
+                onComplete?.Invoke("Error: API Key missing. Please set it in the Settings tab.", true);
                 return;
             }
 
@@ -100,11 +101,11 @@ Wait for the [Observation] from the system before proceeding.";
             }
             else
             {
-                onComplete?.Invoke($"Error: Unsupported model {model}");
+                onComplete?.Invoke($"Error: Unsupported model {model}", true);
             }
         }
 
-        private void CallOpenAI(string apiKey, string model, Action<string> onComplete)
+        private void CallOpenAI(string apiKey, string model, Action<string, bool> onComplete)
         {
             var requestData = new OpenAIRequest { model = model, messages = _history };
             string json = JsonUtility.ToJson(requestData);
@@ -126,26 +127,32 @@ Wait for the [Observation] from the system before proceeding.";
                 }
                 else
                 {
-                    onComplete?.Invoke($"API Error: {webRequest.error}\n{webRequest.downloadHandler.text}");
+                    onComplete?.Invoke($"API Error: {webRequest.error}\n{webRequest.downloadHandler.text}", true);
                 }
                 webRequest.Dispose();
             };
         }
 
         // Placeholder for other providers - similar implementation to CallOpenAI
-        private void CallAnthropic(string key, string model, Action<string> cb) => cb?.Invoke("Anthropic integration coming in Phase 3.1");
-        private void CallGemini(string key, string model, Action<string> cb) => cb?.Invoke("Gemini integration coming in Phase 3.1");
-        private void CallGrok(string key, string model, Action<string> cb) => cb?.Invoke("Grok integration coming in Phase 3.1");
+        private void CallAnthropic(string key, string model, Action<string, bool> cb) => cb?.Invoke("Anthropic integration coming in Phase 3.1", true);
+        private void CallGemini(string key, string model, Action<string, bool> cb) => cb?.Invoke("Gemini integration coming in Phase 3.1", true);
+        private void CallGrok(string key, string model, Action<string, bool> cb) => cb?.Invoke("Grok integration coming in Phase 3.1", true);
 
-        private void HandleResponse(string response, string model, Action<string> onComplete)
+        private void HandleResponse(string response, string model, Action<string, bool> onComplete)
         {
             _history.Add(new ChatMessage { role = "assistant", content = response });
 
             string toolJson = ExtractToolCall(response);
             if (!string.IsNullOrEmpty(toolJson))
             {
-                // Send what we have so far to UI
-                onComplete?.Invoke(response);
+                // Clean up the response for the UI (hide the raw JSON block)
+                string uiResponse = response.Replace("```mcp_json", "[Executing Tool...]").Replace("```", "");
+                
+                // If it's a huge code block, just show the thought and a status
+                string thought = ExtractThought(response);
+                if (!string.IsNullOrEmpty(thought)) uiResponse = $"<thought>{thought}</thought>\n\n[System]: Actioning your request...";
+
+                onComplete?.Invoke(uiResponse, false);
 
                 try
                 {
@@ -158,6 +165,9 @@ Wait for the [Observation] from the system before proceeding.";
                         string path = ExtractParam(toolJson, "path");
                         string content = ExtractContentRaw(toolJson, "content");
                         result = MCPToolRegistry.WriteFile(path, content);
+                        
+                        // Notify user about compilation
+                        onComplete?.Invoke(uiResponse + "\n\n[System]: File written. Waiting for Unity to compile...", false);
                     }
                     else if (toolCall.method == "project/list_directory")
                     {
@@ -169,15 +179,20 @@ Wait for the [Observation] from the system before proceeding.";
                         string type = ExtractParam(toolJson, "type");
                         string name = ExtractParam(toolJson, "name");
                         
-                        var tcs = new System.Threading.Tasks.TaskCompletionSource<MCPToolRegistry.ToolResult>();
-                        EditorApplication.delayCall += () => {
-                            tcs.SetResult(MCPToolRegistry.InstantiateNode(type, name));
-                        };
-                        result = tcs.Task.Result;
+                        // Execute directly on main thread. Using delayCall here causes a Main Thread Deadlock
+                        // because HandleResponse is already on the main thread and waiting for the task blocks it.
+                        result = MCPToolRegistry.InstantiateNode(type, name);
+                    }
+                    else if (toolCall.method == "scene/modify_node")
+                    {
+                        string path = ExtractParam(toolJson, "path");
+                        string prop = ExtractParam(toolJson, "property");
+                        string val = ExtractParam(toolJson, "value");
+                        result = MCPToolRegistry.ModifyNode(path, prop, val);
                     }
                     else
                     {
-                        result = new MCPToolRegistry.ToolResult { success = false, error = "Unknown tool" };
+                        result = new MCPToolRegistry.ToolResult { success = false, error = "Unknown tool: " + toolCall.method };
                     }
 
                     string observation = result.success ? result.observation : $"Error: {result.error}";
@@ -194,7 +209,7 @@ Wait for the [Observation] from the system before proceeding.";
             }
             else
             {
-                onComplete?.Invoke(response);
+                onComplete?.Invoke(response, true);
             }
         }
 
