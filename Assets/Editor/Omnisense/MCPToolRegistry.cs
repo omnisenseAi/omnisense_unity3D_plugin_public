@@ -46,6 +46,77 @@ namespace Omnisense
             return new ToolResult { success = true, observation = $"Recent Console Logs (Errors/Warnings):\n{logs}" };
         }
 
+        public static ToolResult InspectAsset(string path)
+        {
+            Debug.Log($"[Omnisense] Tool: InspectAsset(path='{path}')");
+            try
+            {
+                // Ensure path starts with Assets/ for AssetDatabase
+                string searchPath = path.StartsWith("Assets/") ? path : "Assets/" + path.TrimStart('/');
+                var obj = AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(searchPath);
+                
+                if (obj == null) return new ToolResult { success = false, error = $"Asset not found at path: {searchPath}" };
+
+                string info = $"Asset Name: {obj.name}\nType: {obj.GetType().Name}\n";
+
+                if (obj is GameObject go)
+                {
+                    info += "Components:\n";
+                    foreach (var comp in go.GetComponents<Component>())
+                    {
+                        if (comp != null) info += $"- {comp.GetType().Name}\n";
+                    }
+                }
+                else if (obj is Material mat)
+                {
+                    info += $"Shader: {mat.shader.name}\n";
+                }
+                else if (obj is Texture2D tex)
+                {
+                    info += $"Dimensions: {tex.width}x{tex.height}\nFormat: {tex.format}\n";
+                }
+                else if (obj is AudioClip clip)
+                {
+                    info += $"Length: {clip.length}s\nChannels: {clip.channels}\nFrequency: {clip.frequency}\n";
+                }
+
+                // Generic property dump via SerializedObject
+                info += "\nExposed Properties:\n";
+                SerializedObject so = new SerializedObject(obj);
+                SerializedProperty prop = so.GetIterator();
+                int propCount = 0;
+                if (prop.NextVisible(true))
+                {
+                    do {
+                        if (propCount++ > 30) { info += "... (truncated)"; break; }
+                        
+                        string val = "";
+                        try {
+                            switch(prop.propertyType) {
+                                case SerializedPropertyType.Integer: val = prop.intValue.ToString(); break;
+                                case SerializedPropertyType.Boolean: val = prop.boolValue.ToString(); break;
+                                case SerializedPropertyType.Float: val = prop.floatValue.ToString(); break;
+                                case SerializedPropertyType.String: val = prop.stringValue; break;
+                                case SerializedPropertyType.Color: val = prop.colorValue.ToString(); break;
+                                case SerializedPropertyType.ObjectReference: val = prop.objectReferenceValue != null ? prop.objectReferenceValue.name : "null"; break;
+                                case SerializedPropertyType.Enum: val = prop.enumDisplayNames.Length > prop.enumValueIndex && prop.enumValueIndex >= 0 ? prop.enumDisplayNames[prop.enumValueIndex] : prop.enumValueIndex.ToString(); break;
+                                case SerializedPropertyType.Vector2: val = prop.vector2Value.ToString(); break;
+                                case SerializedPropertyType.Vector3: val = prop.vector3Value.ToString(); break;
+                                default: val = $"[{prop.propertyType}]"; break;
+                            }
+                        } catch { val = "[unreadable]"; }
+                        info += $"- {prop.name}: {val}\n";
+                    } while (prop.NextVisible(false));
+                }
+
+                return new ToolResult { success = true, observation = info };
+            }
+            catch (Exception e)
+            {
+                return new ToolResult { success = false, error = e.Message };
+            }
+        }
+
         public static ToolResult ReadFile(string path)
         {
             Debug.Log($"[Omnisense] Tool: ReadFile(path='{path}')");

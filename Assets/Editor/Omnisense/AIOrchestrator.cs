@@ -57,12 +57,13 @@ You have access to the following MCP tools. To use a tool, output exactly this f
 
 Available Tools:
 1. project/list_directory (params: ""path"") - Lists files.
-2. project/read_file (params: ""path"") - Reads the contents of a file.
-3. project/write_file (params: ""path"", ""content"") - Creates/overwrites a file.
-4. scene/instantiate_node (params: ""type"", ""name"") - Creates a GameObject. 'type' can be a primitive (Cube, Sphere) or 'GameObject' for empty.
-4. scene/modify_node (params: ""path"", ""property"", ""value"") - Edits a GameObject. 'property' can be 'name', 'position', 'add_component', or 'remove_component' (where value is component class name).
-5. scene/inspect_node (params: ""path"") - Returns the object's position and a list of all attached components.
-6. editor/read_console (params: none) - Returns the latest 30 warnings and errors from the Unity Console. Use this to debug failing code or conflicting components!
+2. project/read_file (params: ""path"") - Reads the contents of a text file (like .cs).
+3. project/inspect_asset (params: ""path"") - Reads metadata and properties of non-text binary files (Prefabs, Materials, ScriptableObjects, etc).
+4. project/write_file (params: ""path"", ""content"") - Creates/overwrites a file.
+5. scene/instantiate_node (params: ""type"", ""name"") - Creates a GameObject. 'type' can be a primitive (Cube, Sphere) or 'GameObject' for empty.
+6. scene/modify_node (params: ""path"", ""property"", ""value"") - Edits a GameObject. 'property' can be 'name', 'position', 'add_component', or 'remove_component' (where value is component class name).
+7. scene/inspect_node (params: ""path"") - Returns the object's position and a list of all attached components.
+8. editor/read_console (params: none) - Returns the latest 30 warnings and errors from the Unity Console. Use this to debug failing code or conflicting components!
 
 Wait for the [Observation] from the system before proceeding.";
 
@@ -188,6 +189,11 @@ Wait for the [Observation] from the system before proceeding.";
                     {
                         string path = ExtractParam(toolJson, "path");
                         result = MCPToolRegistry.ReadFile(path);
+                    }
+                    else if (toolCall.method == "project/inspect_asset")
+                    {
+                        string path = ExtractParam(toolJson, "path");
+                        result = MCPToolRegistry.InspectAsset(path);
                     }
                     else if (toolCall.method == "scene/instantiate_node")
                     {
