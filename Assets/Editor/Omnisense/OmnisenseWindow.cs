@@ -564,6 +564,23 @@ namespace Omnisense
                 msgContainer.Add(textField);
             }
 
+            // Append Undo button for AI messages if there are recorded actions for this turn
+            if (sender == "AI")
+            {
+                string turnId = OmnisenseUndoManager.CurrentTurnId;
+                if (!string.IsNullOrEmpty(turnId))
+                {
+                    var undoBtn = new Button { text = "↺ Undo Turn Actions" };
+                    undoBtn.AddToClassList("undo-turn-btn");
+                    undoBtn.clicked += () => {
+                        OmnisenseUndoManager.UndoTurn(turnId);
+                        undoBtn.text = "✓ Undone";
+                        undoBtn.SetEnabled(false);
+                    };
+                    msgContainer.Add(undoBtn);
+                }
+            }
+
             return msgContainer;
         }
 

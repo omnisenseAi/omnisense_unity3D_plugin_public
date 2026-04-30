@@ -234,6 +234,23 @@
     background-color: #e81123; /* Red on hover to indicate removal */
 }
 
+.undo-turn-btn {
+    background-color: transparent;
+    border-color: #555;
+    border-width: 1px;
+    border-radius: 4px;
+    color: #aaa;
+    margin-top: 8px;
+    padding: 4px 8px;
+    align-self: flex-start;
+    font-size: 11px;
+}
+
+.undo-turn-btn:hover {
+    background-color: #333;
+    color: #fff;
+}
+
 /* Settings Tab Styling */
 .settings-sub-tabs {
     flex-direction: row;

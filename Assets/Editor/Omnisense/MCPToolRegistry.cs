@@ -46,6 +46,30 @@ namespace Omnisense
             return new ToolResult { success = true, observation = $"Recent Console Logs (Errors/Warnings):\n{logs}" };
         }
 
+        public static ToolResult ReadFile(string path)
+        {
+            Debug.Log($"[Omnisense] Tool: ReadFile(path='{path}')");
+            try
+            {
+                string fullPath = Path.Combine(Application.dataPath, "..", path);
+                if (!File.Exists(fullPath))
+                {
+                    return new ToolResult { success = false, error = $"File not found: {path}" };
+                }
+
+                string content = File.ReadAllText(fullPath);
+                return new ToolResult 
+                { 
+                    success = true, 
+                    observation = $"Contents of {path}:\n```csharp\n{content}\n```" 
+                };
+            }
+            catch (Exception e)
+            {
+                return new ToolResult { success = false, error = e.Message };
+            }
+        }
+
         public static ToolResult ListDirectory(string path)
         {
             Debug.Log($"[Omnisense] Tool: ListDirectory(path='{path}')");
