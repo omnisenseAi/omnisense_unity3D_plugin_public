@@ -568,11 +568,13 @@ namespace Omnisense
             if (sender == "AI")
             {
                 string turnId = OmnisenseUndoManager.CurrentTurnId;
+                Debug.Log($"[Omnisense] Creating AI message element. CurrentTurnId: '{turnId}'");
                 if (!string.IsNullOrEmpty(turnId))
                 {
                     var undoBtn = new Button { text = "↺ Undo Turn Actions" };
                     undoBtn.AddToClassList("undo-turn-btn");
                     undoBtn.clicked += () => {
+                        Debug.Log($"[Omnisense] Undo button clicked for turn: {turnId}");
                         OmnisenseUndoManager.UndoTurn(turnId);
                         undoBtn.text = "✓ Undone";
                         undoBtn.SetEnabled(false);

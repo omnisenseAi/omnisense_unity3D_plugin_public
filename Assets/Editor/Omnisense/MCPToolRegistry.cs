@@ -262,6 +262,113 @@ namespace Omnisense
                 return new ToolResult { success = false, error = e.Message };
             }
         }
+        public static ToolResult SetComponentProperty(string path, string componentName, string property, string value)
+        {
+            Debug.Log($"[Omnisense] Tool: SetComponentProperty(path='{path}', component='{componentName}', property='{property}', value='{value}')");
+            try
+            {
+                string searchPath = path.StartsWith("/") ? path.Substring(1) : path;
+                GameObject obj = GameObject.Find(searchPath);
+                
+                // Fallback to Project Assets (Prefabs) via exact path or smart search
+                if (obj == null)
+                {
+                    obj = AssetDatabase.LoadAssetAtPath<GameObject>(path);
+                    if (obj == null)
+                    {
+                        string[] guids = AssetDatabase.FindAssets($"{path} t:GameObject");
+                        if (guids.Length > 0) obj = AssetDatabase.LoadAssetAtPath<GameObject>(AssetDatabase.GUIDToAssetPath(guids[0]));
+                    }
+                }
+
+                if (obj == null) return new ToolResult { success = false, error = $"Object/Prefab not found: {path}" };
+
+                Component comp = obj.GetComponent(componentName);
+                if (comp == null) 
+                {
+                    // Case insensitive search
+                    Component[] allComps = obj.GetComponents<Component>();
+                    comp = Array.Find(allComps, c => c != null && c.GetType().Name.Equals(componentName, StringComparison.OrdinalIgnoreCase));
+                    if (comp == null) return new ToolResult { success = false, error = $"Component '{componentName}' not found on {path}" };
+                }
+
+                Undo.RecordObject(comp, "Modify Property via Omnisense");
+                SerializedObject so = new SerializedObject(comp);
+                SerializedProperty prop = so.FindProperty(property);
+                
+                if (prop == null) return new ToolResult { success = false, error = $"Property '{property}' not found on component '{componentName}'." };
+
+                switch (prop.propertyType)
+                {
+                    case SerializedPropertyType.Integer: prop.intValue = int.Parse(value); break;
+                    case SerializedPropertyType.Float: prop.floatValue = float.Parse(value); break;
+                    case SerializedPropertyType.Boolean: prop.boolValue = bool.Parse(value); break;
+                    case SerializedPropertyType.String: prop.stringValue = value; break;
+                    case SerializedPropertyType.Vector2:
+                        string[] v2 = value.Split(',');
+                        prop.vector2Value = new Vector2(float.Parse(v2[0]), float.Parse(v2[1]));
+                        break;
+                    case SerializedPropertyType.Vector3:
+                        string[] v3 = value.Split(',');
+                        prop.vector3Value = new Vector3(float.Parse(v3[0]), float.Parse(v3[1]), float.Parse(v3[2]));
+                        break;
+                    case SerializedPropertyType.ObjectReference:
+                        // Attempt to find object in scene
+                        string targetPath = value.StartsWith("/") ? value.Substring(1) : value;
+                        GameObject targetObj = GameObject.Find(targetPath);
+                        UnityEngine.Object finalTarget = null;
+
+                        if (targetObj != null) 
+                        {
+                            finalTarget = targetObj;
+                        } 
+                        else 
+                        {
+                            // Try exact project path
+                            finalTarget = AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(value);
+                            if (finalTarget == null)
+                            {
+                                // Smart search project assets by name
+                                string[] guids = AssetDatabase.FindAssets(value);
+                                if (guids.Length > 0) {
+                                    finalTarget = AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(AssetDatabase.GUIDToAssetPath(guids[0]));
+                                }
+                            }
+                        }
+
+                        if (finalTarget != null) 
+                        {
+                            if (finalTarget is GameObject go)
+                            {
+                                if (prop.type.Contains("GameObject")) prop.objectReferenceValue = go;
+                                else if (prop.type.Contains("Transform")) prop.objectReferenceValue = go.transform;
+                                else {
+                                    string typeName = prop.type.Replace("PPtr<$", "").Replace(">", "");
+                                    prop.objectReferenceValue = go.GetComponent(typeName);
+                                }
+                            }
+                            else 
+                            {
+                                prop.objectReferenceValue = finalTarget;
+                            }
+                        } 
+                        else 
+                        {
+                            return new ToolResult { success = false, error = $"Target object/asset not found for value: {value}" };
+                        }
+                        break;
+                    default:
+                        return new ToolResult { success = false, error = $"Property type {prop.propertyType} is not supported for remote editing." };
+                }
+
+                so.ApplyModifiedProperties();
+                return new ToolResult { success = true, observation = $"Successfully set {property} = {value} on {componentName} ({path})" };
+            }
+            catch (Exception e)
+            {
+                return new ToolResult { success = false, error = e.Message };
+            }
+        }
 
         public static ToolResult ModifyNode(string path, string property, string value)
         {

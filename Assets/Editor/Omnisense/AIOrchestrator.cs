@@ -63,7 +63,8 @@ Available Tools:
 5. scene/instantiate_node (params: ""type"", ""name"") - Creates a GameObject. 'type' can be a primitive (Cube, Sphere) or 'GameObject' for empty.
 6. scene/modify_node (params: ""path"", ""property"", ""value"") - Edits a GameObject. 'property' can be 'name', 'position', 'add_component', or 'remove_component' (where value is component class name).
 7. scene/inspect_node (params: ""path"") - Returns the object's position and a list of all attached components.
-8. editor/read_console (params: none) - Returns the latest 30 warnings and errors from the Unity Console. Use this to debug failing code or conflicting components!
+8. scene/set_component_property (params: ""path"", ""component"", ""property"", ""value"") - Sets a property on a specific component. 'value' can be a number, string, or a path to another GameObject/Asset.
+9. editor/read_console (params: none) - Returns the latest 30 warnings and errors from the Unity Console. Use this to debug failing code or conflicting components!
 
 Wait for the [Observation] from the system before proceeding.";
 
@@ -215,6 +216,14 @@ Wait for the [Observation] from the system before proceeding.";
                     {
                         string path = ExtractParam(toolJson, "path");
                         result = MCPToolRegistry.InspectNode(path);
+                    }
+                    else if (toolCall.method == "scene/set_component_property")
+                    {
+                        string path = ExtractParam(toolJson, "path");
+                        string compName = ExtractParam(toolJson, "component");
+                        string propName = ExtractParam(toolJson, "property");
+                        string val = ExtractParam(toolJson, "value");
+                        result = MCPToolRegistry.SetComponentProperty(path, compName, propName, val);
                     }
                     else if (toolCall.method == "editor/read_console")
                     {

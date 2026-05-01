@@ -64,3 +64,11 @@ The agent's "hands" have been specifically tuned for the Unity Editor environmen
 - **Asset Metadata Inspection**: Added `project/inspect_asset`. This allows the agent to bypass binary data limitations and read native Unity metadata (Components, Material properties, Texture dimensions) using `SerializedObject` reflection.
 - **Safe File Context**: Implemented `project/read_file` to ensure the agent can safely ingest existing scripts without the risk of accidental overwrites during inspection.
 - **Per-Turn Inline Undo**: The Undo system is now context-aware. AI responses include an inline **"↺ Undo Turn Actions"** button that reverses only the specific modifications (file edits or scene changes) made during that individual chat turn.
+
+---
+
+## 6. Dynamic Scene & Project Wiring (Phase 5)
+- **Dynamic Property Modification**: Added `scene/set_component_property`. The agent can now modify any serialized field on any component, including primitives, booleans, and Vector2/3 types.
+- **Smart Object Linking**: The agent can now "wire" objects together. If a script field (e.g., `Target`) expects a Transform or GameObject, the agent can pass a name (e.g., `"Player2D"`), and the tool will automatically resolve the reference and link the objects.
+- **Smart Asset Search**: All scene tools now incorporate `AssetDatabase.FindAssets` logic. The agent no longer needs exact paths; it can find and modify Prefabs, Materials, and Textures anywhere in the project folder just by mentioning their name.
+- **Prefab Authoring**: The agent can now modify Prefabs directly in the project folder without needing to instantiate them in the active scene.
