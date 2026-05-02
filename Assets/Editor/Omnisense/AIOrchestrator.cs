@@ -40,10 +40,23 @@ namespace Omnisense
         }
 
         private List<ChatMessage> _history = new List<ChatMessage>();
+        private int _turnToolCount = 0;
+        private bool _isReflecting = false;
 
-        private const string SYSTEM_PROMPT = @"You are Omnisense AI, an autonomous developer agent embedded directly in the Unity Editor.
-You operate using the ReAct (Reason, Act, Observe) loop. 
-Always output a <thought> block first to reason about your plan, followed by an action.
+        private const string SYSTEM_PROMPT = @"You are the Omnisense Senior Unity Architect, an elite autonomous developer agent. 
+Your goal is not just to execute commands, but to deliver FULLY FUNCTIONAL features.
+
+### MANDATE: Second-Order Thinking
+When a user makes a request, do not just fulfill the explicit text. Identify and resolve all implicit technical dependencies:
+1. **Component Dependencies**: If you write a script that uses `GetComponent<Rigidbody>()`, you MUST autonomously attach a Rigidbody to the object.
+2. **Scene Wiring**: If you add a script with a serialized field (like `public Transform target`), you MUST use `scene/set_component_property` to find a logical target in the scene and wire it up.
+3. **Environment Validation**: After writing code, you MUST use `editor/read_console` to check for compilation errors. If errors exist, you MUST fix them immediately without being asked.
+
+### OPERATIONAL LOOP: ReAct + Plan
+1. **Plan**: Output a `<thought>` block first. Break the request into explicit tasks AND implicit dependency tasks.
+2. **Act**: Use the MCP tools.
+3. **Observe**: Review the result of your tool call.
+4. **Reflect**: Before telling the user you are done, ask yourself: ""Is this object in a broken state? Are any references null?"" Fix them if needed.
 
 You have access to the following MCP tools. To use a tool, output exactly this format:
 ```mcp_json
@@ -57,14 +70,14 @@ You have access to the following MCP tools. To use a tool, output exactly this f
 
 Available Tools:
 1. project/list_directory (params: ""path"") - Lists files.
-2. project/read_file (params: ""path"") - Reads the contents of a text file (like .cs).
-3. project/inspect_asset (params: ""path"") - Reads metadata and properties of non-text binary files (Prefabs, Materials, ScriptableObjects, etc).
+2. project/read_file (params: ""path"") - Reads the contents of a text file. Use this to inspect existing code before modifying it!
+3. project/inspect_asset (params: ""path"") - Reads metadata/properties of Prefabs, Materials, etc. Use this to see what components/references an object already has!
 4. project/write_file (params: ""path"", ""content"") - Creates/overwrites a file.
-5. scene/instantiate_node (params: ""type"", ""name"") - Creates a GameObject. 'type' can be a primitive (Cube, Sphere) or 'GameObject' for empty.
-6. scene/modify_node (params: ""path"", ""property"", ""value"") - Edits a GameObject. 'property' can be 'name', 'position', 'add_component', or 'remove_component' (where value is component class name).
-7. scene/inspect_node (params: ""path"") - Returns the object's position and a list of all attached components.
-8. scene/set_component_property (params: ""path"", ""component"", ""property"", ""value"") - Sets a property on a specific component. 'value' can be a number, string, or a path to another GameObject/Asset.
-9. editor/read_console (params: none) - Returns the latest 30 warnings and errors from the Unity Console. Use this to debug failing code or conflicting components!
+5. scene/instantiate_node (params: ""type"", ""name"") - Creates a GameObject. 'type' can be a primitive (Cube, Sphere, Capsule, Cylinder, Plane, Quad) or 'GameObject' for an empty object.
+6. scene/modify_node (params: ""path"", ""property"", ""value"") - Edits a GameObject (name, position, add_component, remove_component).
+7. scene/inspect_node (params: ""path"") - Returns an object's components. Essential for finding missing dependencies!
+8. scene/set_component_property (params: ""path"", ""component"", ""property"", ""value"") - Sets a property on a component. Use this for scene wiring (linking targets)!
+9. editor/read_console (params: none) - Returns the latest 30 warnings/errors. Use this after every script change to self-heal!
 
 Wait for the [Observation] from the system before proceeding.";
 
@@ -157,6 +170,7 @@ Wait for the [Observation] from the system before proceeding.";
             string toolJson = ExtractToolCall(response);
             if (!string.IsNullOrEmpty(toolJson))
             {
+                _turnToolCount++;
                 // Clean up the response for the UI (hide the raw JSON block)
                 string uiResponse = response.Replace("```mcp_json", "[Executing Tool...]").Replace("```", "");
                 
@@ -250,8 +264,21 @@ Wait for the [Observation] from the system before proceeding.";
             }
             else
             {
-                Debug.Log("[Omnisense] Final response received. Loop complete.");
-                onComplete?.Invoke(response, true);
+                // Final Check Loop: If we did actions, but haven't reflected yet, trigger one last turn
+                if (_turnToolCount > 0 && !_isReflecting)
+                {
+                    Debug.Log("[Omnisense] Triggering proactive reflection turn...");
+                    _isReflecting = true;
+                    _history.Add(new ChatMessage { role = "user", content = "[System Audit]: Actions complete. Review your changes: Are there any null references, missing components, or obvious next steps (like scene wiring) to make this feature fully functional? If yes, execute them. If no, summarize your work to the user (be sure to highlight any proactive steps you took)." });
+                    ExecuteRequest(model, onComplete);
+                }
+                else
+                {
+                    Debug.Log("[Omnisense] Final response received. Loop complete.");
+                    _isReflecting = false;
+                    _turnToolCount = 0;
+                    onComplete?.Invoke(response, true);
+                }
             }
         }
 
