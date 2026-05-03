@@ -51,6 +51,7 @@ When a user makes a request, do not just fulfill the explicit text. Identify and
 1. **Component Dependencies**: If you write a script that uses `GetComponent<Rigidbody>()`, you MUST autonomously attach a Rigidbody to the object.
 2. **Scene Wiring**: If you add a script with a serialized field (like `public Transform target`), you MUST use `scene/set_component_property` to find a logical target in the scene and wire it up.
 3. **Environment Validation**: After writing code, you MUST use `editor/read_console` to check for compilation errors. If errors exist, you MUST fix them immediately without being asked.
+4. **Project DNA**: You have a long-term memory file called `.omnisense_dna.md`. If you learn something new about the project's architecture, folder structure, or naming conventions, you MUST use `project/update_dna` to record it.
 
 ### OPERATIONAL LOOP: ReAct + Plan
 1. **Plan**: Output a `<thought>` block first. Break the request into explicit tasks AND implicit dependency tasks.
@@ -70,25 +71,38 @@ You have access to the following MCP tools. To use a tool, output exactly this f
 
 Available Tools:
 1. project/list_directory (params: ""path"") - Lists files.
-2. project/read_file (params: ""path"") - Reads the contents of a text file. Use this to inspect existing code before modifying it!
-3. project/inspect_asset (params: ""path"") - Reads metadata/properties of Prefabs, Materials, etc. Use this to see what components/references an object already has!
-4. project/write_file (params: ""path"", ""content"") - Creates/overwrites a file.
-5. scene/instantiate_node (params: ""type"", ""name"") - Creates a GameObject. 'type' can be a primitive (Cube, Sphere, Capsule, Cylinder, Plane, Quad) or 'GameObject' for an empty object.
-6. scene/modify_node (params: ""path"", ""property"", ""value"") - Edits a GameObject (name, position, add_component, remove_component).
-7. scene/inspect_node (params: ""path"") - Returns an object's components. Essential for finding missing dependencies!
-8. scene/set_component_property (params: ""path"", ""component"", ""property"", ""value"") - Sets a property on a component. Use this for scene wiring (linking targets)!
-9. editor/read_console (params: none) - Returns the latest 30 warnings/errors. Use this after every script change to self-heal!
+2. project/read_file (params: ""path"") - Reads the contents of a text file.
+3. project/update_dna (params: ""content"") - Updates the .omnisense_dna.md file. Use this to persist architectural rules, naming conventions, and project knowledge.
+4. project/inspect_asset (params: ""path"") - Reads metadata/properties of Prefabs, Materials, etc.
+5. project/write_file (params: ""path"", ""content"") - Creates/overwrites a file.
+6. scene/instantiate_node (params: ""type"", ""name"") - Creates a GameObject. 'type' can be a primitive (Cube, Sphere, Capsule, Cylinder, Plane, Quad) or 'GameObject' for an empty object.
+7. scene/modify_node (params: ""path"", ""property"", ""value"") - Edits a GameObject (name, position, add_component, remove_component).
+8. scene/inspect_node (params: ""path"") - Returns an object's components.
+9. scene/set_component_property (params: ""path"", ""component"", ""property"", ""value"") - Sets a property on a component.
+10. editor/read_console (params: none) - Returns the latest 30 warnings/errors.
 
 Wait for the [Observation] from the system before proceeding.";
 
         public void ProcessPrompt(string prompt, string model, Action<string, bool> onComplete)
         {
             Debug.Log($"[Omnisense] Processing prompt with model: {model}");
+            _turnToolCount = 0;
+            _isReflecting = false;
             OmnisenseUndoManager.StartTurn(Guid.NewGuid().ToString());
             
             if (_history.Count == 0)
             {
                 _history.Add(new ChatMessage { role = "system", content = SYSTEM_PROMPT });
+                
+                // Load Project DNA if exists
+                try {
+                    string dnaPath = System.IO.Path.Combine(Application.dataPath, "..", ".omnisense_dna.md");
+                    if (System.IO.File.Exists(dnaPath)) {
+                        string dnaContent = System.IO.File.ReadAllText(dnaPath);
+                        _history.Add(new ChatMessage { role = "system", content = $"[PROJECT DNA]\nThis is the persistent memory of this project. Conform to these architectural rules:\n\n{dnaContent}" });
+                        Debug.Log("[Omnisense] Project DNA loaded and injected into context.");
+                    }
+                } catch { }
             }
             _history.Add(new ChatMessage { role = "user", content = prompt });
             ExecuteRequest(model, onComplete);
@@ -129,7 +143,14 @@ Wait for the [Observation] from the system before proceeding.";
 
         private void CallOpenAI(string apiKey, string model, Action<string, bool> onComplete)
         {
-            var requestData = new OpenAIRequest { model = model, messages = _history };
+            // Prevent 'Lost in the Middle' by injecting a trailing format reminder
+            var payloadMessages = new List<ChatMessage>(_history);
+            payloadMessages.Add(new ChatMessage { 
+                role = "user", 
+                content = "[System Reminder: You must use the exact ```mcp_json {\"method\":\"...\",\"params\":{...}} ``` format for any tool calls. Do NOT forget the closing backticks.]" 
+            });
+
+            var requestData = new OpenAIRequest { model = model, messages = payloadMessages };
             string json = JsonUtility.ToJson(requestData);
 
             var webRequest = new UnityWebRequest("https://api.openai.com/v1/chat/completions", "POST");
@@ -163,6 +184,8 @@ Wait for the [Observation] from the system before proceeding.";
         private void CallGemini(string key, string model, Action<string, bool> cb) => cb?.Invoke("Gemini integration coming in Phase 3.1", true);
         private void CallGrok(string key, string model, Action<string, bool> cb) => cb?.Invoke("Grok integration coming in Phase 3.1", true);
 
+        public event Action<string, Action<bool>> OnPendingAction;
+
         private void HandleResponse(string response, string model, Action<string, bool> onComplete)
         {
             _history.Add(new ChatMessage { role = "assistant", content = response });
@@ -171,89 +194,41 @@ Wait for the [Observation] from the system before proceeding.";
             if (!string.IsNullOrEmpty(toolJson))
             {
                 _turnToolCount++;
-                // Clean up the response for the UI (hide the raw JSON block)
                 string uiResponse = response.Replace("```mcp_json", "[Executing Tool...]").Replace("```", "");
-                
-                // If it's a huge code block, just show the thought and a status
                 string thought = ExtractThought(response);
                 if (!string.IsNullOrEmpty(thought)) uiResponse = $"<thought>{thought}</thought>\n\n[System]: Actioning your request...";
-
                 onComplete?.Invoke(uiResponse, false);
 
                 try
                 {
-                    // Parse tool JSON
                     var toolCall = JsonUtility.FromJson<MCPToolRequest>(toolJson);
-                    MCPToolRegistry.ToolResult result = null;
+                    
+                    bool isDestructive = toolCall.method == "project/write_file" ||
+                                         toolCall.method == "scene/instantiate_node" ||
+                                         toolCall.method == "scene/modify_node" ||
+                                         toolCall.method == "scene/set_component_property";
 
-                    if (toolCall.method == "project/write_file")
+                    if (isDestructive && OnPendingAction != null)
                     {
-                        string path = ExtractParam(toolJson, "path");
-                        string content = ExtractContentRaw(toolJson, "content");
-                        result = MCPToolRegistry.WriteFile(path, content);
-                        
-                        // Notify user about compilation
-                        onComplete?.Invoke(uiResponse + "\n\n[System]: File written. Waiting for Unity to compile...", false);
-                    }
-                    else if (toolCall.method == "project/list_directory")
-                    {
-                        string path = ExtractParam(toolJson, "path");
-                        result = MCPToolRegistry.ListDirectory(path);
-                    }
-                    else if (toolCall.method == "project/read_file")
-                    {
-                        string path = ExtractParam(toolJson, "path");
-                        result = MCPToolRegistry.ReadFile(path);
-                    }
-                    else if (toolCall.method == "project/inspect_asset")
-                    {
-                        string path = ExtractParam(toolJson, "path");
-                        result = MCPToolRegistry.InspectAsset(path);
-                    }
-                    else if (toolCall.method == "scene/instantiate_node")
-                    {
-                        string type = ExtractParam(toolJson, "type");
-                        string name = ExtractParam(toolJson, "name");
-                        
-                        // Execute directly on main thread. Using delayCall here causes a Main Thread Deadlock
-                        // because HandleResponse is already on the main thread and waiting for the task blocks it.
-                        result = MCPToolRegistry.InstantiateNode(type, name);
-                    }
-                    else if (toolCall.method == "scene/modify_node")
-                    {
-                        string path = ExtractParam(toolJson, "path");
-                        string prop = ExtractParam(toolJson, "property");
-                        string val = ExtractParam(toolJson, "value");
-                        result = MCPToolRegistry.ModifyNode(path, prop, val);
-                    }
-                    else if (toolCall.method == "scene/inspect_node")
-                    {
-                        string path = ExtractParam(toolJson, "path");
-                        result = MCPToolRegistry.InspectNode(path);
-                    }
-                    else if (toolCall.method == "scene/set_component_property")
-                    {
-                        string path = ExtractParam(toolJson, "path");
-                        string compName = ExtractParam(toolJson, "component");
-                        string propName = ExtractParam(toolJson, "property");
-                        string val = ExtractParam(toolJson, "value");
-                        result = MCPToolRegistry.SetComponentProperty(path, compName, propName, val);
-                    }
-                    else if (toolCall.method == "editor/read_console")
-                    {
-                        result = MCPToolRegistry.ReadConsole();
+                        string diffSummary = GenerateDiffSummary(toolCall, toolJson);
+                        OnPendingAction.Invoke(diffSummary, (approved) => {
+                            if (approved)
+                            {
+                                ExecuteToolAndResume(toolCall, toolJson, uiResponse, model, onComplete);
+                            }
+                            else
+                            {
+                                Debug.Log("[Omnisense] User rejected pending action.");
+                                _history.Add(new ChatMessage { role = "user", content = "[Observation]\nThe user rejected this change. Please revise your plan or ask for clarification." });
+                                ExecuteRequest(model, onComplete);
+                            }
+                        });
+                        return; // Halt until callback
                     }
                     else
                     {
-                        result = new MCPToolRegistry.ToolResult { success = false, error = "Unknown tool: " + toolCall.method };
+                        ExecuteToolAndResume(toolCall, toolJson, uiResponse, model, onComplete);
                     }
-
-                    string observation = result.success ? result.observation : $"Error: {result.error}";
-                    Debug.Log($"[Omnisense] Tool Result: {(result.success ? "Success" : "Failed")}. Observation added to history.");
-                    _history.Add(new ChatMessage { role = "user", content = $"[Observation]\n{observation}" });
-                    
-                    // Recursive ReAct Loop
-                    ExecuteRequest(model, onComplete);
                 }
                 catch (Exception e)
                 {
@@ -264,7 +239,6 @@ Wait for the [Observation] from the system before proceeding.";
             }
             else
             {
-                // Final Check Loop: If we did actions, but haven't reflected yet, trigger one last turn
                 if (_turnToolCount > 0 && !_isReflecting)
                 {
                     Debug.Log("[Omnisense] Triggering proactive reflection turn...");
@@ -277,9 +251,83 @@ Wait for the [Observation] from the system before proceeding.";
                     Debug.Log("[Omnisense] Final response received. Loop complete.");
                     _isReflecting = false;
                     _turnToolCount = 0;
+                    
+                    PruneHistory();
+
                     onComplete?.Invoke(response, true);
                 }
             }
+        }
+
+        private void PruneHistory()
+        {
+            // Truncate large tool observations after the turn is complete to prevent Context Bloat.
+            for (int i = 0; i < _history.Count; i++)
+            {
+                if (_history[i].role == "user" && _history[i].content.StartsWith("[Observation]") && _history[i].content.Length > 250)
+                {
+                    _history[i].content = "[Observation]\n(Output truncated after turn completion to preserve context window).";
+                }
+            }
+            Debug.Log("[Omnisense] Context window pruned for next turn.");
+        }
+
+        private string GenerateDiffSummary(MCPToolRequest toolCall, string toolJson)
+        {
+            if (toolCall.method == "project/write_file")
+                return $"<color=#00FF00>+ Write File:</color> {ExtractParam(toolJson, "path")}";
+            if (toolCall.method == "scene/instantiate_node")
+                return $"<color=#00FF00>+ Instantiate:</color> {ExtractParam(toolJson, "type")} as '{ExtractParam(toolJson, "name")}'";
+            if (toolCall.method == "scene/modify_node")
+            {
+                string prop = ExtractParam(toolJson, "property");
+                string val = ExtractParam(toolJson, "value");
+                if (prop == "add_component") return $"<color=#00FF00>+ Add Component:</color> {val} on {ExtractParam(toolJson, "path")}";
+                if (prop == "remove_component") return $"<color=#FF0000>- Remove Component:</color> {val} from {ExtractParam(toolJson, "path")}";
+                return $"<color=#FFFF00>~ Modify Node:</color> Set {prop} to '{val}' on {ExtractParam(toolJson, "path")}";
+            }
+            if (toolCall.method == "scene/set_component_property")
+                return $"<color=#FFFF00>~ Set Property:</color> {ExtractParam(toolJson, "component")}.{ExtractParam(toolJson, "property")} = '{ExtractParam(toolJson, "value")}' on {ExtractParam(toolJson, "path")}";
+            return "Pending changes...";
+        }
+
+        private void ExecuteToolAndResume(MCPToolRequest toolCall, string toolJson, string uiResponse, string model, Action<string, bool> onComplete)
+        {
+            MCPToolRegistry.ToolResult result = null;
+
+            if (toolCall.method == "project/write_file")
+            {
+                string path = ExtractParam(toolJson, "path");
+                string content = ExtractContentRaw(toolJson, "content");
+                result = MCPToolRegistry.WriteFile(path, content);
+                onComplete?.Invoke(uiResponse + "\n\n[System]: File written. Waiting for Unity to compile...", false);
+            }
+            else if (toolCall.method == "project/list_directory")
+                result = MCPToolRegistry.ListDirectory(ExtractParam(toolJson, "path"));
+            else if (toolCall.method == "project/read_file")
+                result = MCPToolRegistry.ReadFile(ExtractParam(toolJson, "path"));
+            else if (toolCall.method == "project/update_dna")
+                result = MCPToolRegistry.UpdateDNA(ExtractContentRaw(toolJson, "content"));
+            else if (toolCall.method == "project/inspect_asset")
+                result = MCPToolRegistry.InspectAsset(ExtractParam(toolJson, "path"));
+            else if (toolCall.method == "scene/instantiate_node")
+                result = MCPToolRegistry.InstantiateNode(ExtractParam(toolJson, "type"), ExtractParam(toolJson, "name"));
+            else if (toolCall.method == "scene/modify_node")
+                result = MCPToolRegistry.ModifyNode(ExtractParam(toolJson, "path"), ExtractParam(toolJson, "property"), ExtractParam(toolJson, "value"));
+            else if (toolCall.method == "scene/inspect_node")
+                result = MCPToolRegistry.InspectNode(ExtractParam(toolJson, "path"));
+            else if (toolCall.method == "scene/set_component_property")
+                result = MCPToolRegistry.SetComponentProperty(ExtractParam(toolJson, "path"), ExtractParam(toolJson, "component"), ExtractParam(toolJson, "property"), ExtractParam(toolJson, "value"));
+            else if (toolCall.method == "editor/read_console")
+                result = MCPToolRegistry.ReadConsole();
+            else
+                result = new MCPToolRegistry.ToolResult { success = false, error = "Unknown tool: " + toolCall.method };
+
+            string observation = result.success ? result.observation : $"Error: {result.error}";
+            Debug.Log($"[Omnisense] Tool Result: {(result.success ? "Success" : "Failed")}. Observation added to history.");
+            _history.Add(new ChatMessage { role = "user", content = $"[Observation]\n{observation}" });
+            
+            ExecuteRequest(model, onComplete);
         }
 
         [Serializable]
@@ -317,8 +365,19 @@ Wait for the [Observation] from the system before proceeding.";
 
         private string ExtractToolCall(string content)
         {
-            var match = Regex.Match(content, "```mcp_json\n(.*?)\n```", RegexOptions.Singleline);
-            return match.Success ? match.Groups[1].Value : null;
+            // 1. Try to match proper block WITH closing backticks
+            var match = Regex.Match(content, @"```(?:mcp_json|json)?\s*(\{.*?\})\s*```", RegexOptions.Singleline);
+            if (match.Success) return match.Groups[1].Value.Trim();
+
+            // 2. Try to match block WITHOUT closing backticks (e.g. if the LLM stopped generating early)
+            var matchNoClose = Regex.Match(content, @"```(?:mcp_json|json)?\s*(\{.*\})", RegexOptions.Singleline);
+            if (matchNoClose.Success) return matchNoClose.Groups[1].Value.Trim();
+
+            // 3. Fallback: try to match raw JSON without any markdown ticks at all
+            var fallback = Regex.Match(content, @"\{\s*""method"":\s*"".*?\}", RegexOptions.Singleline);
+            if (fallback.Success) return fallback.Value.Trim();
+
+            return null;
         }
         private string ExtractContentRaw(string json, string key)
         {

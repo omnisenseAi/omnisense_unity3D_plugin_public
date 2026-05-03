@@ -137,6 +137,8 @@ namespace Omnisense
                 }
             });
 
+            AIOrchestrator.Instance.OnPendingAction += HandlePendingAction;
+
             root.RegisterCallback<KeyDownEvent>(evt => {
                 if (evt.actionKey && evt.keyCode == KeyCode.V)
                 {
@@ -366,6 +368,54 @@ namespace Omnisense
                 }
                 AddMessageToChat("AI", response);
             });
+        }
+
+        private void HandlePendingAction(string diffSummary, Action<bool> callback)
+        {
+            var container = new VisualElement();
+            container.AddToClassList("chat-message");
+            container.AddToClassList("ai-message");
+            container.style.backgroundColor = new Color(0.15f, 0.15f, 0.15f);
+            container.style.borderLeftColor = new Color(1f, 0.8f, 0.2f);
+            container.style.borderLeftWidth = 4;
+
+            var header = new Label("⚠️ Pending Action Approval");
+            header.style.unityFontStyleAndWeight = FontStyle.Bold;
+            header.style.color = new Color(1f, 0.8f, 0.2f);
+            container.Add(header);
+
+            var diffText = new Label(diffSummary);
+            diffText.enableRichText = true;
+            diffText.style.marginTop = 5;
+            diffText.style.marginBottom = 10;
+            diffText.style.whiteSpace = WhiteSpace.Normal;
+            container.Add(diffText);
+
+            var buttonRow = new VisualElement();
+            buttonRow.style.flexDirection = FlexDirection.Row;
+
+            var btnAccept = new Button(() => {
+                container.RemoveFromHierarchy();
+                callback(true);
+            }) { text = "✓ Accept" };
+            btnAccept.style.backgroundColor = new Color(0.2f, 0.5f, 0.2f);
+            btnAccept.style.color = Color.white;
+            btnAccept.style.flexGrow = 1;
+
+            var btnReject = new Button(() => {
+                container.RemoveFromHierarchy();
+                callback(false);
+            }) { text = "✗ Reject" };
+            btnReject.style.backgroundColor = new Color(0.6f, 0.2f, 0.2f);
+            btnReject.style.color = Color.white;
+            btnReject.style.flexGrow = 1;
+
+            buttonRow.Add(btnAccept);
+            buttonRow.Add(btnReject);
+            container.Add(buttonRow);
+
+            _chatHistory.Add(container);
+            SafeScrollTo(container);
         }
 
         private void UpdateSpinner()

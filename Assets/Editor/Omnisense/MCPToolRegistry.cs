@@ -46,6 +46,21 @@ namespace Omnisense
             return new ToolResult { success = true, observation = $"Recent Console Logs (Errors/Warnings):\n{logs}" };
         }
 
+        public static ToolResult UpdateDNA(string content)
+        {
+            Debug.Log($"[Omnisense] Tool: UpdateDNA()");
+            try
+            {
+                string dnaPath = Path.Combine(Application.dataPath, "..", ".omnisense_dna.md");
+                File.WriteAllText(dnaPath, content);
+                return new ToolResult { success = true, observation = "Project DNA updated successfully. This knowledge will persist across sessions." };
+            }
+            catch (Exception e)
+            {
+                return new ToolResult { success = false, error = e.Message };
+            }
+        }
+
         public static ToolResult InspectAsset(string path)
         {
             Debug.Log($"[Omnisense] Tool: InspectAsset(path='{path}')");

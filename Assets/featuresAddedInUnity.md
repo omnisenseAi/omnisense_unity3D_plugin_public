@@ -72,3 +72,26 @@ The agent's "hands" have been specifically tuned for the Unity Editor environmen
 - **Smart Object Linking**: The agent can now "wire" objects together. If a script field (e.g., `Target`) expects a Transform or GameObject, the agent can pass a name (e.g., `"Player2D"`), and the tool will automatically resolve the reference and link the objects.
 - **Smart Asset Search**: All scene tools now incorporate `AssetDatabase.FindAssets` logic. The agent no longer needs exact paths; it can find and modify Prefabs, Materials, and Textures anywhere in the project folder just by mentioning their name.
 - **Prefab Authoring**: The agent can now modify Prefabs directly in the project folder without needing to instantiate them in the active scene.
+
+---
+
+## 7. Project DNA: Persistent Meta-Memory (Phase 6)
+- **Long-Term Memory**: Implemented a `.omnisense_dna.md` system. The agent now carries architectural knowledge across editor restarts.
+- **DNA Bootstrapping**: At the start of every session, the orchestrator injects the contents of the DNA file into the system context, ensuring zero-shot conformity to project rules.
+- **Autonomous Learning**: Added `project/update_dna`. The agent is mandated to silently update this file whenever it learns new project-specific conventions, folder structures, or architectural patterns.
+- **User-Editable Logic**: Since DNA is stored as a simple Markdown file in the root, users can manually "train" the agent by adding bullet points to the file.
+
+---
+
+## 8. Trust Framework: The Diff Illusion (Phase 7)
+- **Asynchronous Execution Pausing**: Refactored the `AIOrchestrator` ReAct loop to pause execution whenever the agent attempts a "destructive" action (e.g., `write_file`, `modify_node`, `instantiate_node`).
+- **Visual Staging UI**: The UI now intercepts these actions and renders a rich-text "Diff Summary" bubble (e.g., `<color=#00FF00>+ Add Component: Rigidbody</color>`).
+- **Interactive Gatekeeping**: Users are presented with `[✓ Accept]` and `[✗ Reject]` buttons. This builds psychological safety, allowing senior engineers to trust the agent with complex, multi-file tasks.
+- **Rejection Feedback Loop**: Clicking `[Reject]` feeds an observation back to the agent ("User rejected this change"), forcing the AI to autonomously pivot, ask for clarification, or try a different approach.
+
+---
+
+## 9. Context Optimization (Phase 8)
+- **Ephemeral Tool Observations**: To prevent "Lost in the Middle" context bloat during long sessions, the orchestrator now actively prunes the context window. Once a ReAct loop completes, large `[Observation]` blocks (like 1000-line script reads) are truncated.
+- **System Prompt Re-Injection**: The orchestrator now injects a hidden format reminder at the very end of the payload array immediately before querying the API. This guarantees that strict JSON formatting instructions remain in the model's primary attention span, completely eliminating formatting hallucinations caused by prompt saturation.
+- **Robust Tool Extraction**: Upgraded the regex logic to use a three-tier fallback system, allowing the orchestrator to extract tool calls even if the LLM omits markdown closing ticks or outputs raw JSON.
