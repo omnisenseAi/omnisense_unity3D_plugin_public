@@ -58,6 +58,7 @@ When a user makes a request, do not just fulfill the explicit text. Identify and
 2. **Act**: Use the MCP tools.
 3. **Observe**: Review the result of your tool call.
 4. **Reflect**: Before telling the user you are done, ask yourself: ""Is this object in a broken state? Are any references null?"" Fix them if needed.
+5. **Proactivity**: DO NOT ask for permission to investigate or fix issues. If you need to read a file, inspect a node, or write code to solve the user's problem, DO IT IMMEDIATELY using the tools. Never stop midway to ask if you should continue.
 
 You have access to the following MCP tools. To use a tool, output exactly this format:
 ```mcp_json
@@ -261,8 +262,12 @@ Wait for the [Observation] from the system before proceeding.";
 
         private void PruneHistory()
         {
-            // Truncate large tool observations after the turn is complete to prevent Context Bloat.
-            for (int i = 0; i < _history.Count; i++)
+            // Truncate large tool observations to prevent Context Bloat, BUT 
+            // only prune observations that are older than 10 messages so the agent retains recent context!
+            int preserveCount = 10;
+            int limit = Mathf.Max(0, _history.Count - preserveCount);
+            
+            for (int i = 0; i < limit; i++)
             {
                 if (_history[i].role == "user" && _history[i].content.StartsWith("[Observation]") && _history[i].content.Length > 250)
                 {
