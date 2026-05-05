@@ -484,6 +484,16 @@ namespace Omnisense
                         return new ToolResult { success = false, error = $"Component {value} not found on {path}" };
                     }
                 }
+                else if (property.ToLower() == "tag")
+                {
+                    obj.tag = value;
+                }
+                else if (property.ToLower() == "layer")
+                {
+                    int layer = LayerMask.NameToLayer(value);
+                    if (layer == -1) return new ToolResult { success = false, error = $"Layer '{value}' does not exist. Use a valid Unity layer." };
+                    obj.layer = layer;
+                }
 
                 return new ToolResult { success = true, observation = $"Modified {property} of {path} to {value}" };
             }
@@ -515,6 +525,89 @@ namespace Omnisense
                     success = true, 
                     observation = $"GameObject '{obj.name}' at position {obj.transform.position}. Attached Components: " + string.Join(", ", compDetails) 
                 };
+            }
+            catch (Exception e)
+            {
+                return new ToolResult { success = false, error = e.Message };
+            }
+        }
+
+        public static ToolResult CreatePrefab(string sceneObjectPath, string destinationAssetPath)
+        {
+            Debug.Log($"[Omnisense] Tool: CreatePrefab(sceneObject='{sceneObjectPath}', destination='{destinationAssetPath}')");
+            try
+            {
+                string searchPath = sceneObjectPath.StartsWith("/") ? sceneObjectPath.Substring(1) : sceneObjectPath;
+                GameObject obj = GameObject.Find(searchPath);
+                if (obj == null) return new ToolResult { success = false, error = $"Scene object not found: {sceneObjectPath}" };
+
+                // Ensure path ends with .prefab
+                if (!destinationAssetPath.EndsWith(".prefab")) destinationAssetPath += ".prefab";
+                
+                // Ensure directory exists
+                string directory = Path.GetDirectoryName(Path.Combine(Application.dataPath, "..", destinationAssetPath));
+                if (!Directory.Exists(directory)) Directory.CreateDirectory(directory);
+
+                GameObject prefabAsset = PrefabUtility.SaveAsPrefabAsset(obj, destinationAssetPath);
+                if (prefabAsset != null)
+                {
+                    return new ToolResult { success = true, observation = $"Successfully created prefab asset at {destinationAssetPath}" };
+                }
+                return new ToolResult { success = false, error = "PrefabUtility failed to save the asset." };
+            }
+            catch (Exception e)
+            {
+                return new ToolResult { success = false, error = e.Message };
+            }
+        }
+        public static ToolResult CreateTagOrLayer(string type, string name)
+        {
+            Debug.Log($"[Omnisense] Tool: CreateTagOrLayer(type='{type}', name='{name}')");
+            try
+            {
+                UnityEngine.Object[] asset = AssetDatabase.LoadAllAssetsAtPath("ProjectSettings/TagManager.asset");
+                if (asset == null || asset.Length == 0) return new ToolResult { success = false, error = "TagManager.asset not found." };
+
+                SerializedObject tagManager = new SerializedObject(asset[0]);
+                
+                if (type.ToLower() == "tag")
+                {
+                    SerializedProperty tagsProp = tagManager.FindProperty("tags");
+                    // Check if tag already exists
+                    for (int i = 0; i < tagsProp.arraySize; i++)
+                    {
+                        if (tagsProp.GetArrayElementAtIndex(i).stringValue == name)
+                            return new ToolResult { success = true, observation = $"Tag '{name}' already exists." };
+                    }
+                    tagsProp.InsertArrayElementAtIndex(tagsProp.arraySize);
+                    tagsProp.GetArrayElementAtIndex(tagsProp.arraySize - 1).stringValue = name;
+                }
+                else if (type.ToLower() == "layer")
+                {
+                    SerializedProperty layersProp = tagManager.FindProperty("layers");
+                    // Layers 0-7 are built-in, 8-31 are user-defined
+                    bool foundSlot = false;
+                    for (int i = 8; i < 32; i++)
+                    {
+                        SerializedProperty slot = layersProp.GetArrayElementAtIndex(i);
+                        if (slot.stringValue == name)
+                            return new ToolResult { success = true, observation = $"Layer '{name}' already exists." };
+                        
+                        if (string.IsNullOrEmpty(slot.stringValue) && !foundSlot)
+                        {
+                            slot.stringValue = name;
+                            foundSlot = true;
+                        }
+                    }
+                    if (!foundSlot) return new ToolResult { success = false, error = "No empty layer slots available (Unity limits to 32 layers total)." };
+                }
+                else
+                {
+                    return new ToolResult { success = false, error = "Type must be 'Tag' or 'Layer'." };
+                }
+
+                tagManager.ApplyModifiedProperties();
+                return new ToolResult { success = true, observation = $"Successfully created {type}: {name}" };
             }
             catch (Exception e)
             {

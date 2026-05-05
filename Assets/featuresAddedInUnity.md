@@ -132,3 +132,9 @@ The agent's "hands" have been specifically tuned for the Unity Editor environmen
 - **Undo Relocation**: Moved the "Undo Actions for this Prompt" button to the **User bubble**. This clearly maps the destructive actions of the AI turn back to the user's triggering prompt.
 - **Network Safety (Timeouts)**: Added mandatory **60-second timeouts** to all API calls (OpenAI, Anthropic, Gemini, Grok). This prevents the UI from hanging indefinitely if an LLM provider or local proxy becomes unresponsive.
 - **Payload Diagnostics**: Integrated real-time logging of the conversation history size into the console, assisting in the diagnosis of context-window performance issues.
+---
+
+## 16. Advanced Unity Automation: Tags, Layers & Prefabs (Phase 15)
+- **Scene-to-Asset Workflow**: Implemented the `project/create_prefab` tool, allowing the agent to save scene GameObjects as project assets (`.prefab`). This mimics the "drag-and-drop" developer workflow for asset creation.
+- **Tag & Layer Management**: Upgraded the `scene/modify_node` tool to support the `tag` and `layer` properties. The agent can now organize objects into collision layers or tag them for gameplay logic (e.g., tagging an object as "Enemy" or "Player").
+- **Automatic Directory Creation**: The prefab tool automatically creates parent directories if the specified destination path does not exist, ensuring a clean project structure.

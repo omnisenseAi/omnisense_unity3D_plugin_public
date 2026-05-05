@@ -106,11 +106,13 @@ Available Tools:
 4. project/inspect_asset (params: ""path"") - Reads metadata/properties of Prefabs, Materials, etc.
 5. project/write_file (params: ""path"", ""content"") - Creates a NEW file. DO NOT use this for modifying existing files unless you are completely rewriting them.
 6. project/edit_file (params: ""path"", ""search_block"", ""replace_block"") - Fast O(1) editing for existing files. Use this to modify existing code. 'search_block' MUST be an exact string match (including whitespace) of the code you want to replace.
-7. scene/instantiate_node (params: ""type"", ""name"") - Creates a GameObject. 'type' can be a primitive (Cube, Sphere, Capsule, Cylinder, Plane, Quad) or 'GameObject' for an empty object.
-8. scene/modify_node (params: ""path"", ""property"", ""value"") - Edits a GameObject (name, position, add_component, remove_component).
-9. scene/inspect_node (params: ""path"") - Returns an object's components.
-10. scene/set_component_property (params: ""path"", ""component"", ""property"", ""value"") - Sets a property on a component.
-11. editor/read_console (params: none) - Returns the latest 30 warnings/errors.
+7. project/create_prefab (params: ""path"", ""destinationAssetPath"") - Converts a scene GameObject into a project asset. 'path' is the scene path, 'destinationAssetPath' is the save location (e.g., ""Assets/Prefabs/Player.prefab"").
+8. project/create_tag_or_layer (params: ""type"", ""name"") - Creates a new Tag or Layer in Project Settings. 'type' is ""Tag"" or ""Layer"".
+9. scene/instantiate_node (params: ""type"", ""name"") - Creates a GameObject. 'type' can be a primitive (Cube, Sphere, Capsule, Cylinder, Plane, Quad) or 'GameObject' for an empty object.
+10. scene/modify_node (params: ""path"", ""property"", ""value"") - Edits a GameObject. Supported properties: name, position (x,y,z), add_component (Type), remove_component (Type), tag (string), layer (string).
+11. scene/inspect_node (params: ""path"") - Returns an object's components.
+12. scene/set_component_property (params: ""path"", ""component"", ""property"", ""value"") - Sets a property on a component.
+13. editor/read_console (params: none) - Returns the latest 30 warnings/errors.
 
 Wait for the [Observation] from the system before proceeding.";
 
@@ -391,6 +393,8 @@ Wait for the [Observation] from the system before proceeding.";
                     
                     bool isDestructive = toolCall.method == "project/write_file" ||
                                          toolCall.method == "project/edit_file" ||
+                                         toolCall.method == "project/create_prefab" ||
+                                         toolCall.method == "project/create_tag_or_layer" ||
                                          toolCall.method == "scene/instantiate_node" ||
                                          toolCall.method == "scene/modify_node" ||
                                          toolCall.method == "scene/set_component_property";
@@ -520,6 +524,10 @@ Wait for the [Observation] from the system before proceeding.";
                 result = MCPToolRegistry.SetComponentProperty(p.path, p.component, p.property, p.value);
             else if (toolCall.method == "editor/read_console")
                 result = MCPToolRegistry.ReadConsole();
+            else if (toolCall.method == "project/create_prefab")
+                result = MCPToolRegistry.CreatePrefab(p.path, p.destinationAssetPath);
+            else if (toolCall.method == "project/create_tag_or_layer")
+                result = MCPToolRegistry.CreateTagOrLayer(p.type, p.name);
             else
                 result = new MCPToolRegistry.ToolResult { success = false, error = "Unknown tool: " + toolCall.method };
 
@@ -597,6 +605,7 @@ Wait for the [Observation] from the system before proceeding.";
             public string component;
             public string search_block;
             public string replace_block;
+            public string destinationAssetPath;
         }
     }
 }
