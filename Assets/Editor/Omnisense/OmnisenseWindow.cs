@@ -28,6 +28,8 @@ namespace Omnisense
         private int _spinnerIndex = 0;
         private double _lastSpinnerTime = 0;
 
+        private string _currentTurnAIContent = "";
+
         private VisualElement _commercialSettings;
         private VisualElement _selfhostedSettings;
 
@@ -268,8 +270,8 @@ namespace Omnisense
             _chatHistory.Add(_loadingIndicator);
             SafeScrollTo(_loadingIndicator);
             EditorApplication.update += UpdateSpinner;
-            
             ToggleStopButton(true);
+            _currentTurnAIContent = "";
 
             AIOrchestrator.Instance.Resume(model, (response, isFinal) => {
                 if (isFinal) ToggleStopButton(false);
@@ -279,7 +281,11 @@ namespace Omnisense
                     EditorApplication.update -= UpdateSpinner;
                     _loadingIndicator = null;
                 }
-                AddMessageToChat("AI", response);
+                
+                _currentTurnAIContent += response + "\n\n";
+                // When resuming, we might not have the original turnId easily, so we can try to grab it from the UndoManager
+                string currentTurnId = OmnisenseUndoManager.CurrentTurnId;
+                AddMessageToChat("AI", response, isFinal, currentTurnId);
                 if (isFinal) Debug.Log("[Omnisense] Auto-Resume completed successfully.");
             });
         }
@@ -488,8 +494,11 @@ namespace Omnisense
             }
             _contextChips.Clear(); // Ephemeral context - clear after sending
 
-            AddMessageToChat("User", contextText + text);
+            string turnId = Guid.NewGuid().ToString();
+
+            AddMessageToChat("User", contextText + text, true, turnId);
             _chatInput.value = "";
+            _currentTurnAIContent = "";
             
             // Add Loading Spinner
             _loadingIndicator = new Label("⠋ Thinking...");
@@ -500,7 +509,7 @@ namespace Omnisense
             
             ToggleStopButton(true);
 
-            AIOrchestrator.Instance.ProcessPrompt(contextText + text, _modelSelector.value, (response, isFinal) => {
+            AIOrchestrator.Instance.ProcessPrompt(contextText + text, _modelSelector.value, turnId, (response, isFinal) => {
                 if (isFinal) ToggleStopButton(false);
                 if (isFinal && _loadingIndicator != null)
                 {
@@ -508,7 +517,9 @@ namespace Omnisense
                     EditorApplication.update -= UpdateSpinner;
                     _loadingIndicator = null;
                 }
-                AddMessageToChat("AI", response);
+                
+                _currentTurnAIContent += response + "\n\n";
+                AddMessageToChat("AI", response, isFinal, turnId);
             });
         }
 
@@ -661,10 +672,10 @@ namespace Omnisense
             }
         }
 
-        public void AddMessageToChat(string sender, string content)
+        public void AddMessageToChat(string sender, string content, bool showCopyButton = false, string turnId = "")
         {
-            Debug.Log($"[Omnisense] Adding message from {sender} to chat UI.");
-            var msgContainer = CreateMessageElement(sender, content);
+            Debug.Log($"[Omnisense] Adding message from {sender} to chat UI. CopyButton: {showCopyButton}");
+            var msgContainer = CreateMessageElement(sender, content, showCopyButton, turnId);
             _chatHistory.Add(msgContainer);
 
             // Save to current session
@@ -673,7 +684,8 @@ namespace Omnisense
                 _currentSession.messages.Add(new ChatMessage { 
                     sender = sender, 
                     content = content, 
-                    timestamp = DateTime.Now.ToString("HH:mm:ss") 
+                    timestamp = DateTime.Now.ToString("HH:mm:ss"),
+                    turnId = turnId
                 });
                 OmnisenseSessionManager.SaveSession(_currentSession);
             }
@@ -693,7 +705,7 @@ namespace Omnisense
             };
         }
 
-        private VisualElement CreateMessageElement(string sender, string content)
+        private VisualElement CreateMessageElement(string sender, string content, bool showCopyButton = false, string turnId = "")
         {
             var msgContainer = new VisualElement();
             msgContainer.AddToClassList("message-container");
@@ -756,22 +768,62 @@ namespace Omnisense
                 msgContainer.Add(textField);
             }
 
-            // Append Undo button for AI messages if there are recorded actions for this turn
-            if (sender == "AI")
+            // Append Undo button for User messages (representing the start of a turn)
+            if (sender == "User" && !string.IsNullOrEmpty(turnId))
             {
-                string turnId = OmnisenseUndoManager.CurrentTurnId;
-                Debug.Log($"[Omnisense] Creating AI message element. CurrentTurnId: '{turnId}'");
-                if (!string.IsNullOrEmpty(turnId))
-                {
-                    var undoBtn = new Button { text = "↺ Undo Turn Actions" };
-                    undoBtn.AddToClassList("undo-turn-btn");
-                    undoBtn.clicked += () => {
-                        Debug.Log($"[Omnisense] Undo button clicked for turn: {turnId}");
-                        OmnisenseUndoManager.UndoTurn(turnId);
+                // Note: since the AI hasn't executed yet when this is first created,
+                // the undo button will always appear. But it will only undo things if they exist.
+                var undoBtn = new Button { text = "↺ Undo Actions for this Prompt" };
+                undoBtn.AddToClassList("undo-turn-btn");
+                undoBtn.clicked += () => {
+                    Debug.Log($"[Omnisense] Undo button clicked for turn: {turnId}");
+                    bool success = OmnisenseUndoManager.UndoTurn(turnId);
+                    if (success) {
                         undoBtn.text = "✓ Undone";
                         undoBtn.SetEnabled(false);
-                    };
-                    msgContainer.Add(undoBtn);
+                    }
+                };
+                msgContainer.Add(undoBtn);
+            }
+
+            if (showCopyButton)
+            {
+                var footer = new VisualElement();
+                footer.style.flexDirection = FlexDirection.Row;
+                footer.style.justifyContent = Justify.FlexEnd;
+                footer.style.marginTop = 5;
+
+                string copyText = (sender == "User") ? content : _currentTurnAIContent;
+                string btnText = (sender == "User") ? "Copy" : "Copy Full Response";
+                
+                var btnCopy = new Button(() => {
+                    EditorGUIUtility.systemCopyBuffer = copyText.Trim();
+                    Debug.Log("[Omnisense] Content copied to clipboard.");
+                }) { text = btnText };
+                btnCopy.AddToClassList("copy-button-small");
+
+                if (sender == "AI")
+                {
+                    // For AI, we wrap the message and place the button BELOW the bubble
+                    var wrapper = new VisualElement();
+                    wrapper.AddToClassList("ai-turn-wrapper");
+                    // Move current msgContainer into wrapper
+                    wrapper.Add(msgContainer);
+                    
+                    var aiFooter = new VisualElement();
+                    aiFooter.style.flexDirection = FlexDirection.Row;
+                    aiFooter.style.justifyContent = Justify.FlexStart;
+                    aiFooter.style.marginTop = 2;
+                    aiFooter.Add(btnCopy);
+                    wrapper.Add(aiFooter);
+                    
+                    return wrapper;
+                }
+                else
+                {
+                    // For User, keep it inside at the bottom right
+                    footer.Add(btnCopy);
+                    msgContainer.Add(footer);
                 }
             }
 
@@ -802,9 +854,31 @@ namespace Omnisense
             _chatHistory.Clear();
             
             VisualElement last = null;
-            foreach (var msg in session.messages)
+            for (int i = 0; i < session.messages.Count; i++)
             {
-                last = CreateMessageElement(msg.sender, msg.content);
+                var msg = session.messages[i];
+                bool showCopy = false;
+
+                if (msg.sender == "User")
+                {
+                    showCopy = true;
+                }
+                else if (msg.sender == "AI")
+                {
+                    // For AI, show copy button only on the last message of the turn
+                    if (i == session.messages.Count - 1 || session.messages[i + 1].sender == "User")
+                    {
+                        showCopy = true;
+                        // Accumulate the entire AI turn for the copy buffer
+                        _currentTurnAIContent = "";
+                        for (int j = i; j >= 0 && session.messages[j].sender == "AI"; j--)
+                        {
+                            _currentTurnAIContent = session.messages[j].content + "\n\n" + _currentTurnAIContent;
+                        }
+                    }
+                }
+
+                last = CreateMessageElement(msg.sender, msg.content, showCopy, msg.turnId);
                 _chatHistory.Add(last);
             }
 

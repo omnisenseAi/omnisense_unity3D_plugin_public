@@ -260,15 +260,11 @@ namespace Omnisense
                 string directory = Path.GetDirectoryName(fullPath);
                 if (!Directory.Exists(directory)) Directory.CreateDirectory(directory);
 
-                string oldContent = File.Exists(fullPath) ? File.ReadAllText(fullPath) : null;
+                bool isNew = !File.Exists(fullPath);
+                OmnisenseUndoManager.RegisterFileBackup(fullPath, isNew);
+
                 File.WriteAllText(fullPath, content ?? "");
                 AssetDatabase.Refresh();
-
-                OmnisenseUndoManager.RegisterAction($"Write file: {path}", () => {
-                    if (oldContent == null) File.Delete(fullPath);
-                    else File.WriteAllText(fullPath, oldContent);
-                    AssetDatabase.Refresh();
-                });
 
                 return new ToolResult { success = true, observation = $"Successfully wrote file: {path}" };
             }

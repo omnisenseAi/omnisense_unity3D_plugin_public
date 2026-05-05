@@ -113,13 +113,13 @@ Available Tools:
 
 Wait for the [Observation] from the system before proceeding.";
 
-        public void ProcessPrompt(string prompt, string model, Action<string, bool> onComplete)
+        public void ProcessPrompt(string prompt, string model, string turnId, Action<string, bool> onComplete)
         {
             Debug.Log($"[Omnisense] Processing prompt with model: {model}");
             _turnToolCount = 0;
             _isReflecting = false;
             _isAborted = false;
-            OmnisenseUndoManager.StartTurn(Guid.NewGuid().ToString());
+            OmnisenseUndoManager.StartTurn(turnId);
             
             if (_history.Count == 0)
             {
@@ -225,13 +225,14 @@ Wait for the [Observation] from the system before proceeding.";
             string json = JsonUtility.ToJson(requestData);
 
             _activeRequest = new UnityWebRequest("https://api.openai.com/v1/chat/completions", "POST");
+            _activeRequest.timeout = 60; // 60 second timeout
             byte[] bodyRaw = Encoding.UTF8.GetBytes(json);
             _activeRequest.uploadHandler = new UploadHandlerRaw(bodyRaw);
             _activeRequest.downloadHandler = new DownloadHandlerBuffer();
             _activeRequest.SetRequestHeader("Content-Type", "application/json");
             _activeRequest.SetRequestHeader("Authorization", "Bearer " + apiKey);
 
-            Debug.Log($"[Omnisense] Sending request to OpenAI API using model {model}...");
+            Debug.Log($"[Omnisense] Sending request to OpenAI API using model {model} ({payloadMessages.Count} messages in history)...");
             var operation = _activeRequest.SendWebRequest();
             operation.completed += (op) =>
             {
@@ -254,10 +255,118 @@ Wait for the [Observation] from the system before proceeding.";
             };
         }
 
-        // Placeholder for other providers - similar implementation to CallOpenAI
-        private void CallAnthropic(string key, string model, Action<string, bool> cb) => cb?.Invoke("Anthropic integration coming in Phase 3.1", true);
-        private void CallGemini(string key, string model, Action<string, bool> cb) => cb?.Invoke("Gemini integration coming in Phase 3.1", true);
-        private void CallGrok(string key, string model, Action<string, bool> cb) => cb?.Invoke("Grok integration coming in Phase 3.1", true);
+        private void CallAnthropic(string apiKey, string model, Action<string, bool> onComplete)
+        {
+            if (_isAborted) return;
+            var payloadMessages = new List<ChatMessage>(_history);
+            int maxTokens = EditorPrefs.GetInt("Omnisense_Anthropic_MaxTokens", 4096);
+            
+            // Anthropic expects a slightly different JSON structure
+            string json = "{\"model\":\"" + model + "\",\"max_tokens\":" + maxTokens + ",\"messages\":" + JsonUtility.ToJson(new HistoryWrapper { list = payloadMessages }) + "}";
+            // HistoryWrapper adds a "list" key, but Anthropic wants a raw array. We need a cleaner way.
+            string messagesJson = "[";
+            for(int i=0; i<payloadMessages.Count; i++) {
+                messagesJson += "{\"role\":\"" + (payloadMessages[i].role == "system" ? "user" : payloadMessages[i].role) + "\",\"content\":\"" + payloadMessages[i].content.Replace("\"", "\\\"").Replace("\n", "\\n") + "\"}";
+                if(i < payloadMessages.Count-1) messagesJson += ",";
+            }
+            messagesJson += "]";
+            
+            json = "{\"model\":\"" + model + "\",\"max_tokens\":" + maxTokens + ",\"messages\":" + messagesJson + "}";
+
+            _activeRequest = new UnityWebRequest("https://api.anthropic.com/v1/messages", "POST");
+            _activeRequest.timeout = 60;
+            byte[] bodyRaw = Encoding.UTF8.GetBytes(json);
+            _activeRequest.uploadHandler = new UploadHandlerRaw(bodyRaw);
+            _activeRequest.downloadHandler = new DownloadHandlerBuffer();
+            _activeRequest.SetRequestHeader("Content-Type", "application/json");
+            _activeRequest.SetRequestHeader("x-api-key", apiKey);
+            _activeRequest.SetRequestHeader("anthropic-version", "2023-06-01");
+
+            Debug.Log($"[Omnisense] Sending request to Anthropic API using model {model} ({payloadMessages.Count} messages in history)...");
+            var operation = _activeRequest.SendWebRequest();
+            operation.completed += (op) => {
+                if (_isAborted || _activeRequest == null) return;
+                if (_activeRequest.result == UnityWebRequest.Result.Success) {
+                    // Anthropic response is different
+                    string resp = _activeRequest.downloadHandler.text;
+                    // Simple extraction for now
+                    var match = Regex.Match(resp, "\"text\":\"(.*?)\"", RegexOptions.Singleline);
+                    HandleResponse(match.Success ? match.Groups[1].Value.Replace("\\n", "\n").Replace("\\\"", "\"") : resp, model, onComplete);
+                } else {
+                    onComplete?.Invoke($"Anthropic Error: {_activeRequest.error}\n{_activeRequest.downloadHandler.text}", true);
+                }
+                _activeRequest?.Dispose(); _activeRequest = null;
+            };
+        }
+
+        private void CallGemini(string apiKey, string model, Action<string, bool> onComplete)
+        {
+            if (_isAborted) return;
+            int maxTokens = EditorPrefs.GetInt("Omnisense_Gemini_MaxTokens", 4096);
+            
+            // Gemini JSON structure is nested: contents -> parts -> text
+            string contentsJson = "[";
+            for(int i=0; i<_history.Count; i++) {
+                string role = _history[i].role == "assistant" ? "model" : "user";
+                contentsJson += "{\"role\":\"" + role + "\",\"parts\":[{\"text\":\"" + _history[i].content.Replace("\"", "\\\"").Replace("\n", "\\n") + "\"}]}";
+                if(i < _history.Count-1) contentsJson += ",";
+            }
+            contentsJson += "]";
+            
+            string json = "{\"contents\":" + contentsJson + ",\"generationConfig\":{\"maxOutputTokens\":" + maxTokens + "}}";
+
+            string url = $"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={apiKey}";
+            _activeRequest = new UnityWebRequest(url, "POST");
+            _activeRequest.timeout = 60;
+            byte[] bodyRaw = Encoding.UTF8.GetBytes(json);
+            _activeRequest.uploadHandler = new UploadHandlerRaw(bodyRaw);
+            _activeRequest.downloadHandler = new DownloadHandlerBuffer();
+            _activeRequest.SetRequestHeader("Content-Type", "application/json");
+
+            Debug.Log($"[Omnisense] Sending request to Gemini API using model {model} ({_history.Count} messages in history)...");
+            var operation = _activeRequest.SendWebRequest();
+            operation.completed += (op) => {
+                if (_isAborted || _activeRequest == null) return;
+                if (_activeRequest.result == UnityWebRequest.Result.Success) {
+                    string resp = _activeRequest.downloadHandler.text;
+                    var match = Regex.Match(resp, "\"text\":\\s*\"(.*?)\"", RegexOptions.Singleline);
+                    HandleResponse(match.Success ? match.Groups[1].Value.Replace("\\n", "\n").Replace("\\\"", "\"") : resp, model, onComplete);
+                } else {
+                    onComplete?.Invoke($"Gemini Error: {_activeRequest.error}\n{_activeRequest.downloadHandler.text}", true);
+                }
+                _activeRequest?.Dispose(); _activeRequest = null;
+            };
+        }
+
+        private void CallGrok(string apiKey, string model, Action<string, bool> onComplete)
+        {
+            if (_isAborted) return;
+            int maxTokens = EditorPrefs.GetInt("Omnisense_Grok_MaxTokens", 4096);
+            var payloadMessages = new List<ChatMessage>(_history);
+            var requestData = new OpenAIRequest { model = model, messages = payloadMessages, max_completion_tokens = maxTokens };
+            string json = JsonUtility.ToJson(requestData);
+
+            _activeRequest = new UnityWebRequest("https://api.x.ai/v1/chat/completions", "POST");
+            _activeRequest.timeout = 60;
+            byte[] bodyRaw = Encoding.UTF8.GetBytes(json);
+            _activeRequest.uploadHandler = new UploadHandlerRaw(bodyRaw);
+            _activeRequest.downloadHandler = new DownloadHandlerBuffer();
+            _activeRequest.SetRequestHeader("Content-Type", "application/json");
+            _activeRequest.SetRequestHeader("Authorization", "Bearer " + apiKey);
+
+            Debug.Log($"[Omnisense] Sending request to Grok API using model {model} ({payloadMessages.Count} messages in history)...");
+            var operation = _activeRequest.SendWebRequest();
+            operation.completed += (op) => {
+                if (_isAborted || _activeRequest == null) return;
+                if (_activeRequest.result == UnityWebRequest.Result.Success) {
+                    string responseText = ExtractContent(_activeRequest.downloadHandler.text);
+                    HandleResponse(responseText, model, onComplete);
+                } else {
+                    onComplete?.Invoke($"Grok Error: {_activeRequest.error}\n{_activeRequest.downloadHandler.text}", true);
+                }
+                _activeRequest?.Dispose(); _activeRequest = null;
+            };
+        }
 
         public event Action<string, Action<bool>> OnPendingAction;
 

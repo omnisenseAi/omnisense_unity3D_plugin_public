@@ -1,69 +1,139 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using UnityEditor;
 using UnityEngine;
 
 namespace Omnisense
 {
+    [Serializable]
+    public class FileBackup
+    {
+        public string originalPath;
+        public string backupPath;
+        public bool wasCreated;
+    }
+
+    [Serializable]
+    public class TurnUndoData
+    {
+        public string turnId;
+        public List<FileBackup> fileBackups = new List<FileBackup>();
+    }
+
+    [Serializable]
+    public class UndoDatabase
+    {
+        public List<TurnUndoData> turns = new List<TurnUndoData>();
+    }
+
     public static class OmnisenseUndoManager
     {
-        private class UndoAction
-        {
-            public Action Undo;
-            public string Description;
-        }
+        private static string BackupDir => Path.Combine(Directory.GetCurrentDirectory(), "UserSettings", "OmnisenseUndo");
+        private static string DbPath => Path.Combine(BackupDir, "undo_db.json");
 
-        private static Dictionary<string, List<UndoAction>> _turnActions = new Dictionary<string, List<UndoAction>>();
         public static string CurrentTurnId { get; private set; } = "";
 
         public static void StartTurn(string turnId)
         {
             CurrentTurnId = turnId;
-            if (!_turnActions.ContainsKey(turnId))
-            {
-                _turnActions[turnId] = new List<UndoAction>();
-            }
+            if (!Directory.Exists(BackupDir)) Directory.CreateDirectory(BackupDir);
         }
 
-        public static void RegisterAction(string description, Action undoLogic)
+        public static void RegisterFileBackup(string filePath, bool isNewFile)
         {
             if (string.IsNullOrEmpty(CurrentTurnId)) return;
-            
-            // Insert at the beginning for LIFO execution
-            _turnActions[CurrentTurnId].Insert(0, new UndoAction { Description = description, Undo = undoLogic });
-            Debug.Log($"[Omnisense] Undo registered for turn {CurrentTurnId}: {description}");
+
+            var db = LoadDatabase();
+            var turn = db.turns.Find(t => t.turnId == CurrentTurnId);
+            if (turn == null)
+            {
+                turn = new TurnUndoData { turnId = CurrentTurnId };
+                db.turns.Add(turn);
+            }
+
+            // Don't backup multiple times in the same turn
+            if (turn.fileBackups.Exists(f => f.originalPath == filePath)) return;
+
+            var backup = new FileBackup 
+            { 
+                originalPath = filePath, 
+                wasCreated = isNewFile,
+                backupPath = Path.Combine(BackupDir, $"{CurrentTurnId}_{Guid.NewGuid()}.bak")
+            };
+
+            if (!isNewFile && File.Exists(filePath))
+            {
+                File.Copy(filePath, backup.backupPath, true);
+            }
+
+            turn.fileBackups.Add(backup);
+            SaveDatabase(db);
+            Debug.Log($"[Omnisense] Undo backup created for {filePath}");
         }
 
-        public static void UndoTurn(string turnId)
+        public static bool UndoTurn(string turnId)
         {
-            if (_turnActions.TryGetValue(turnId, out var actions))
+            var db = LoadDatabase();
+            var turn = db.turns.Find(t => t.turnId == turnId);
+            if (turn == null) 
             {
-                foreach (var action in actions)
+                Undo.PerformUndo(); // Trigger Unity's scene undo just in case
+                return true;
+            }
+
+            bool filesRestored = false;
+            foreach (var backup in turn.fileBackups)
+            {
+                try 
                 {
-                    try 
-                    { 
-                        action.Undo?.Invoke(); 
-                        Debug.Log($"[Omnisense] Undone: {action.Description}");
+                    if (backup.wasCreated)
+                    {
+                        if (File.Exists(backup.originalPath)) File.Delete(backup.originalPath);
                     }
-                    catch (Exception e) 
-                    { 
-                        Debug.LogError($"[Omnisense] Undo failed for '{action.Description}': {e.Message}"); 
+                    else if (File.Exists(backup.backupPath))
+                    {
+                        File.Copy(backup.backupPath, backup.originalPath, true);
                     }
+                    filesRestored = true;
                 }
-                actions.Clear();
-                Debug.Log($"[Omnisense] Finished undoing turn {turnId}");
+                catch (Exception e) { Debug.LogError($"[Omnisense] File undo failed for {backup.originalPath}: {e.Message}"); }
             }
-            else
-            {
-                Debug.LogWarning($"[Omnisense] No undo history for turn {turnId}");
-            }
+
+            if (filesRestored) AssetDatabase.Refresh();
+            Undo.PerformUndo(); // Trigger Unity's scene undo
+            
+            Debug.Log($"[Omnisense] Undone turn {turnId}.");
+            return true;
         }
 
         public static void PerformUndo()
         {
-            if (!string.IsNullOrEmpty(CurrentTurnId)) UndoTurn(CurrentTurnId);
+            var db = LoadDatabase();
+            if (db.turns.Count > 0)
+            {
+                // Undo the last turn recorded
+                string lastTurnId = db.turns[db.turns.Count - 1].turnId;
+                UndoTurn(lastTurnId);
+            }
+            else
+            {
+                // Fallback to Unity's native scene undo if no file changes were recorded by Omnisense
+                Undo.PerformUndo();
+            }
         }
 
-        public static void Clear() => _turnActions.Clear();
+        private static UndoDatabase LoadDatabase()
+        {
+            if (!File.Exists(DbPath)) return new UndoDatabase();
+            try { return JsonUtility.FromJson<UndoDatabase>(File.ReadAllText(DbPath)) ?? new UndoDatabase(); }
+            catch { return new UndoDatabase(); }
+        }
+
+        private static void SaveDatabase(UndoDatabase db)
+        {
+            if (!Directory.Exists(BackupDir)) Directory.CreateDirectory(BackupDir);
+            File.WriteAllText(DbPath, JsonUtility.ToJson(db));
+        }
     }
 }

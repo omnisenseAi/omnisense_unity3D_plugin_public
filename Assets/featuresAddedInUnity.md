@@ -118,3 +118,17 @@ The agent's "hands" have been specifically tuned for the Unity Editor environmen
 - **AI Stop Button**: Added a red **Stop (⏹)** button to the chat UI that appears during AI execution. It provides a hard-cancel mechanism to abort active `UnityWebRequest` calls and halt the ReAct loop instantly.
 - **Improved Multiline Handling**: The new parser flawlessly handles complex unescaping for nested quotes, literal backslashes, and varying whitespace in the AI's JSON tool calls.
 - **Dynamic Button Toggling**: The Send and Stop buttons now toggle visibility based on the agent's processing state, preventing duplicate request submissions while a task is in flight.
+---
+
+## 14. UI/UX: Copy & Turn Management (Phase 13)
+- **High-Visibility Copy System**: Implemented high-contrast "Copy" buttons for every chat message. Buttons use a dedicated footer layout to ensure they are never obscured by long text.
+- **AI Turn Consolidation**: For multi-bubble AI responses, a single **"Copy Full Response"** button appears outside and below the final bubble. This button captures the entire logical turn (thoughts, tool outputs, and summaries) into one clipboard action.
+- **Session-Aware Rendering**: The UI factory now intelligently restores interactive buttons when loading chat history, ensuring they persist across Unity assembly reloads.
+
+---
+
+## 15. Persistent Undo & Stability (Phase 14)
+- **File-Based Undo Database**: Replaced volatile in-memory undo delegates with a robust, persistent backup system. Original file contents are now securely saved to `.omnisense_undo/` before any AI modification. This allows for perfect undo capability even after Unity re-compiles scripts.
+- **Undo Relocation**: Moved the "Undo Actions for this Prompt" button to the **User bubble**. This clearly maps the destructive actions of the AI turn back to the user's triggering prompt.
+- **Network Safety (Timeouts)**: Added mandatory **60-second timeouts** to all API calls (OpenAI, Anthropic, Gemini, Grok). This prevents the UI from hanging indefinitely if an LLM provider or local proxy becomes unresponsive.
+- **Payload Diagnostics**: Integrated real-time logging of the conversation history size into the console, assisting in the diagnosis of context-window performance issues.

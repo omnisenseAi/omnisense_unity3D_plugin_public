@@ -12,6 +12,7 @@ namespace Omnisense
         public string sender;
         public string content;
         public string timestamp;
+        public string turnId; // Added to map user prompts to file-backup turns
     }
 
     [Serializable]

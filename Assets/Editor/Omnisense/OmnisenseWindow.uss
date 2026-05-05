@@ -253,20 +253,21 @@
 }
 
 .undo-turn-btn {
-    background-color: transparent;
-    border-color: #555;
+    background-color: rgba(255, 255, 255, 0.1);
+    border-color: rgba(255, 255, 255, 0.3);
     border-width: 1px;
     border-radius: 4px;
-    color: #aaa;
+    color: white;
     margin-top: 8px;
-    padding: 4px 8px;
+    padding: 4px 10px;
     align-self: flex-start;
     font-size: 11px;
 }
 
 .undo-turn-btn:hover {
-    background-color: #333;
-    color: #fff;
+    background-color: #e81123;
+    border-color: #ff3344;
+    color: white;
 }
 
 /* Settings Tab Styling */
@@ -429,6 +430,25 @@
 
 .token-slider .unity-base-field__label {
     display: none; /* Hide internal label to use our own */
+}
+
+.copy-button-small {
+    background-color: rgba(255, 255, 255, 0.1);
+    border-width: 1px;
+    border-color: rgba(255, 255, 255, 0.3);
+    color: white;
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 4px;
+}
+
+.copy-button-small:hover {
+    background-color: #007acc;
+    border-color: #0098ff;
+}
+
+.ai-turn-wrapper {
+    margin-bottom: 12px;
 }
 
 .token-field {
