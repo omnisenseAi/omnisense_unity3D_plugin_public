@@ -53,13 +53,27 @@ namespace Omnisense
             return sessions;
         }
 
+        public static ChatSession GetSessionById(string id)
+        {
+            if (string.IsNullOrEmpty(id)) return null;
+            string path = Path.Combine(HistoryPath, $"{id}.json");
+            if (!File.Exists(path)) return null;
+            
+            try {
+                string json = File.ReadAllText(path);
+                return JsonUtility.FromJson<ChatSession>(json);
+            } catch { return null; }
+        }
+
         public static ChatSession CreateNewSession()
         {
-            return new ChatSession {
+            var session = new ChatSession {
                 id = Guid.NewGuid().ToString(),
                 name = $"Session {DateTime.Now:MMM dd, HH:mm}",
                 lastUpdated = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
             };
+            SaveSession(session); // Save immediately so it can be restored
+            return session;
         }
     }
 }

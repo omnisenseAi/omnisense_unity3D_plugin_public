@@ -253,7 +253,7 @@ namespace Omnisense
 
         public static ToolResult WriteFile(string path, string content)
         {
-            Debug.Log($"[Omnisense] Tool: WriteFile(path='{path}')");
+            Debug.Log($"[Omnisense] Tool: WriteFile(path='{path}') - Content Length: {content?.Length ?? 0}");
             try
             {
                 string fullPath = Path.Combine(Application.dataPath, "..", path);
@@ -261,7 +261,7 @@ namespace Omnisense
                 if (!Directory.Exists(directory)) Directory.CreateDirectory(directory);
 
                 string oldContent = File.Exists(fullPath) ? File.ReadAllText(fullPath) : null;
-                File.WriteAllText(fullPath, content);
+                File.WriteAllText(fullPath, content ?? "");
                 AssetDatabase.Refresh();
 
                 OmnisenseUndoManager.RegisterAction($"Write file: {path}", () => {

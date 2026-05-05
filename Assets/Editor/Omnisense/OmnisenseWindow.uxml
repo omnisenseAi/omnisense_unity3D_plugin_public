@@ -16,6 +16,7 @@
                     <ui:Label text="Model:" class="toolbar-label" />
                     <ui:DropdownField name="model-selector" class="toolbar-dropdown" />
                     <ui:VisualElement class="spacer" />
+                    <ui:Button name="btn-copy-chat" text="Copy Chat" class="toolbar-btn" />
                     <ui:Button name="btn-history" text="History" class="toolbar-btn" />
                     <ui:Button name="btn-new-chat" text="+ New Chat" class="toolbar-btn" />
                     <ui:Button name="btn-undo" text="Undo" class="toolbar-btn" />
@@ -47,6 +48,7 @@
                     <ui:VisualElement class="input-footer">
                         <ui:Button name="btn-attach" text="📎" class="attach-button" tooltip="Attach file to context" />
                         <ui:VisualElement class="spacer" />
+                        <ui:Button name="btn-stop" text="⏹" class="stop-button-circular hidden" tooltip="Stop AI execution" />
                         <ui:Button name="send-button" text="↑" class="send-button-circular" />
                     </ui:VisualElement>
                 </ui:VisualElement>
@@ -63,15 +65,35 @@
                     <ui:VisualElement name="commercial-settings" class="settings-group">
                         <ui:Label text="OpenAI API Key:" class="field-label" />
                         <ui:TextField name="openai-key" password="true" class="field-input" />
+                        <ui:Label text="OpenAI Max Output Tokens (1 - 16384):" class="field-label" />
+                        <ui:VisualElement class="slider-row">
+                            <ui:SliderInt name="openai-max-tokens-slider" low-value="1" high-value="16384" class="token-slider" />
+                            <ui:IntegerField name="openai-max-tokens-field" class="token-field" />
+                        </ui:VisualElement>
                         
                         <ui:Label text="Anthropic API Key:" class="field-label" />
                         <ui:TextField name="anthropic-key" password="true" class="field-input" />
+                        <ui:Label text="Anthropic Max Output Tokens (1 - 8192):" class="field-label" />
+                        <ui:VisualElement class="slider-row">
+                            <ui:SliderInt name="anthropic-max-tokens-slider" low-value="1" high-value="8192" class="token-slider" />
+                            <ui:IntegerField name="anthropic-max-tokens-field" class="token-field" />
+                        </ui:VisualElement>
 
                         <ui:Label text="Google Gemini API Key:" class="field-label" />
                         <ui:TextField name="gemini-key" password="true" class="field-input" />
+                        <ui:Label text="Gemini Max Output Tokens (1 - 8192):" class="field-label" />
+                        <ui:VisualElement class="slider-row">
+                            <ui:SliderInt name="gemini-max-tokens-slider" low-value="1" high-value="8192" class="token-slider" />
+                            <ui:IntegerField name="gemini-max-tokens-field" class="token-field" />
+                        </ui:VisualElement>
 
                         <ui:Label text="Grok (xAI) API Key:" class="field-label" />
                         <ui:TextField name="grok-key" password="true" class="field-input" />
+                        <ui:Label text="Grok Max Output Tokens (1 - 8192):" class="field-label" />
+                        <ui:VisualElement class="slider-row">
+                            <ui:SliderInt name="grok-max-tokens-slider" low-value="1" high-value="8192" class="token-slider" />
+                            <ui:IntegerField name="grok-max-tokens-field" class="token-field" />
+                        </ui:VisualElement>
                     </ui:VisualElement>
 
                     <ui:VisualElement name="selfhosted-settings" class="settings-group hidden">

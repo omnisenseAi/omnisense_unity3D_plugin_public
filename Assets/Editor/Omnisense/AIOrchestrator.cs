@@ -25,6 +25,7 @@ namespace Omnisense
         {
             public string model;
             public List<ChatMessage> messages;
+            public int max_completion_tokens;
         }
 
         [Serializable]
@@ -42,6 +43,34 @@ namespace Omnisense
         private List<ChatMessage> _history = new List<ChatMessage>();
         private int _turnToolCount = 0;
         private bool _isReflecting = false;
+
+        [Serializable]
+        private class HistoryWrapper { public List<ChatMessage> list; }
+
+        public AIOrchestrator()
+        {
+            LoadHistory();
+        }
+
+        private void SaveHistory()
+        {
+            var wrapper = new HistoryWrapper { list = _history };
+            EditorPrefs.SetString("Omnisense_AI_History", JsonUtility.ToJson(wrapper));
+            // Debug.Log($"[Omnisense] AI History saved ({_history.Count} messages).");
+        }
+
+        private void LoadHistory()
+        {
+            string json = EditorPrefs.GetString("Omnisense_AI_History", "");
+            if (!string.IsNullOrEmpty(json))
+            {
+                var wrapper = JsonUtility.FromJson<HistoryWrapper>(json);
+                if (wrapper != null && wrapper.list != null) {
+                    _history = wrapper.list;
+                    Debug.Log($"[Omnisense] AI History restored ({_history.Count} messages) from persistent storage.");
+                }
+            }
+        }
 
         private const string SYSTEM_PROMPT = @"You are the Omnisense Senior Unity Architect, an elite autonomous developer agent. 
 Your goal is not just to execute commands, but to deliver FULLY FUNCTIONAL features.
@@ -89,6 +118,7 @@ Wait for the [Observation] from the system before proceeding.";
             Debug.Log($"[Omnisense] Processing prompt with model: {model}");
             _turnToolCount = 0;
             _isReflecting = false;
+            _isAborted = false;
             OmnisenseUndoManager.StartTurn(Guid.NewGuid().ToString());
             
             if (_history.Count == 0)
@@ -106,6 +136,12 @@ Wait for the [Observation] from the system before proceeding.";
                 } catch { }
             }
             _history.Add(new ChatMessage { role = "user", content = prompt });
+            SaveHistory();
+            ExecuteRequest(model, onComplete);
+        }
+
+        public void Resume(string model, Action<string, bool> onComplete)
+        {
             ExecuteRequest(model, onComplete);
         }
 
@@ -118,32 +154,65 @@ Wait for the [Observation] from the system before proceeding.";
                 return;
             }
 
+            // Set pending state to allow auto-resume after assembly reload
+            EditorPrefs.SetBool("Omnisense_AI_PendingResume", true);
+            EditorPrefs.SetString("Omnisense_AI_LastModel", model);
+
             // Prepare request based on provider
             if (model.StartsWith("gpt") || model.StartsWith("o3"))
             {
-                CallOpenAI(apiKey, model, onComplete);
+                CallOpenAI(apiKey, model, (resp, final) => {
+                    if (final) EditorPrefs.SetBool("Omnisense_AI_PendingResume", false);
+                    onComplete?.Invoke(resp, final);
+                });
             }
             else if (model.StartsWith("claude"))
             {
-                CallAnthropic(apiKey, model, onComplete);
+                CallAnthropic(apiKey, model, (resp, final) => {
+                    if (final) EditorPrefs.SetBool("Omnisense_AI_PendingResume", false);
+                    onComplete?.Invoke(resp, final);
+                });
             }
             else if (model.StartsWith("gemini"))
             {
-                CallGemini(apiKey, model, onComplete);
+                CallGemini(apiKey, model, (resp, final) => {
+                    if (final) EditorPrefs.SetBool("Omnisense_AI_PendingResume", false);
+                    onComplete?.Invoke(resp, final);
+                });
             }
             else if (model.StartsWith("grok"))
             {
-                CallGrok(apiKey, model, onComplete);
+                CallGrok(apiKey, model, (resp, final) => {
+                    if (final) EditorPrefs.SetBool("Omnisense_AI_PendingResume", false);
+                    onComplete?.Invoke(resp, final);
+                });
             }
             else
             {
+                EditorPrefs.SetBool("Omnisense_AI_PendingResume", false);
                 Debug.LogError($"[Omnisense] Unsupported model selected: {model}");
                 onComplete?.Invoke($"Error: Unsupported model {model}", true);
             }
         }
 
+        private UnityWebRequest _activeRequest;
+        private bool _isAborted = false;
+
+        public void Abort()
+        {
+            Debug.Log("[Omnisense] User requested to abort AI execution.");
+            _isAborted = true;
+            EditorPrefs.SetBool("Omnisense_AI_PendingResume", false);
+            if (_activeRequest != null)
+            {
+                _activeRequest.Abort();
+                _activeRequest = null;
+            }
+        }
+
         private void CallOpenAI(string apiKey, string model, Action<string, bool> onComplete)
         {
+            if (_isAborted) return;
             // Prevent 'Lost in the Middle' by injecting a trailing format reminder
             var payloadMessages = new List<ChatMessage>(_history);
             payloadMessages.Add(new ChatMessage { 
@@ -151,32 +220,37 @@ Wait for the [Observation] from the system before proceeding.";
                 content = "[System Reminder: You must use the exact ```mcp_json {\"method\":\"...\",\"params\":{...}} ``` format for any tool calls. Do NOT forget the closing backticks.]" 
             });
 
-            var requestData = new OpenAIRequest { model = model, messages = payloadMessages };
+            int maxTokens = EditorPrefs.GetInt("Omnisense_OpenAI_MaxTokens", 4096);
+            var requestData = new OpenAIRequest { model = model, messages = payloadMessages, max_completion_tokens = maxTokens };
             string json = JsonUtility.ToJson(requestData);
 
-            var webRequest = new UnityWebRequest("https://api.openai.com/v1/chat/completions", "POST");
+            _activeRequest = new UnityWebRequest("https://api.openai.com/v1/chat/completions", "POST");
             byte[] bodyRaw = Encoding.UTF8.GetBytes(json);
-            webRequest.uploadHandler = new UploadHandlerRaw(bodyRaw);
-            webRequest.downloadHandler = new DownloadHandlerBuffer();
-            webRequest.SetRequestHeader("Content-Type", "application/json");
-            webRequest.SetRequestHeader("Authorization", "Bearer " + apiKey);
+            _activeRequest.uploadHandler = new UploadHandlerRaw(bodyRaw);
+            _activeRequest.downloadHandler = new DownloadHandlerBuffer();
+            _activeRequest.SetRequestHeader("Content-Type", "application/json");
+            _activeRequest.SetRequestHeader("Authorization", "Bearer " + apiKey);
 
             Debug.Log($"[Omnisense] Sending request to OpenAI API using model {model}...");
-            var operation = webRequest.SendWebRequest();
+            var operation = _activeRequest.SendWebRequest();
             operation.completed += (op) =>
             {
-                if (webRequest.result == UnityWebRequest.Result.Success)
+                if (_isAborted) return;
+                if (_activeRequest == null) return;
+                
+                if (_activeRequest.result == UnityWebRequest.Result.Success)
                 {
                     Debug.Log("[Omnisense] Received successful response from API.");
-                    string responseText = ExtractContent(webRequest.downloadHandler.text);
+                    string responseText = ExtractContent(_activeRequest.downloadHandler.text);
                     HandleResponse(responseText, model, onComplete);
                 }
                 else
                 {
-                    Debug.LogError($"[Omnisense] API Error: {webRequest.error}");
-                    onComplete?.Invoke($"API Error: {webRequest.error}\n{webRequest.downloadHandler.text}", true);
+                    Debug.LogError($"[Omnisense] API Error: {_activeRequest.error}");
+                    onComplete?.Invoke($"API Error: {_activeRequest.error}\n{_activeRequest.downloadHandler.text}", true);
                 }
-                webRequest.Dispose();
+                _activeRequest.Dispose();
+                _activeRequest = null;
             };
         }
 
@@ -190,6 +264,7 @@ Wait for the [Observation] from the system before proceeding.";
         private void HandleResponse(string response, string model, Action<string, bool> onComplete)
         {
             _history.Add(new ChatMessage { role = "assistant", content = response });
+            SaveHistory();
 
             string toolJson = ExtractToolCall(response);
             if (!string.IsNullOrEmpty(toolJson))
@@ -221,6 +296,7 @@ Wait for the [Observation] from the system before proceeding.";
                             {
                                 Debug.Log("[Omnisense] User rejected pending action.");
                                 _history.Add(new ChatMessage { role = "user", content = "[Observation]\nThe user rejected this change. Please revise your plan or ask for clarification." });
+                                SaveHistory();
                                 ExecuteRequest(model, onComplete);
                             }
                         });
@@ -235,6 +311,7 @@ Wait for the [Observation] from the system before proceeding.";
                 {
                     Debug.LogError($"[Omnisense] Error parsing tool call: {e.Message}");
                     _history.Add(new ChatMessage { role = "user", content = $"[Observation]\nError parsing tool call: {e.Message}" });
+                    SaveHistory();
                     ExecuteRequest(model, onComplete);
                 }
             }
@@ -245,6 +322,7 @@ Wait for the [Observation] from the system before proceeding.";
                     Debug.Log("[Omnisense] Triggering proactive reflection turn...");
                     _isReflecting = true;
                     _history.Add(new ChatMessage { role = "user", content = "[System Audit]: Actions complete. Review your changes: Are there any null references, missing components, or obvious next steps (like scene wiring) to make this feature fully functional? If yes, execute them. If no, summarize your work to the user (be sure to highlight any proactive steps you took)." });
+                    SaveHistory();
                     ExecuteRequest(model, onComplete);
                 }
                 else
@@ -279,50 +357,51 @@ Wait for the [Observation] from the system before proceeding.";
 
         private string GenerateDiffSummary(MCPToolRequest toolCall, string toolJson)
         {
+            if (toolCall.@params == null) return "Pending changes...";
+            
             if (toolCall.method == "project/write_file")
-                return $"<color=#00FF00>+ Write File:</color> {ExtractParam(toolJson, "path")}";
+                return $"<color=#00FF00>+ Write File:</color> {toolCall.@params.path}";
             if (toolCall.method == "scene/instantiate_node")
-                return $"<color=#00FF00>+ Instantiate:</color> {ExtractParam(toolJson, "type")} as '{ExtractParam(toolJson, "name")}'";
+                return $"<color=#00FF00>+ Instantiate:</color> {toolCall.@params.type} as '{toolCall.@params.name}'";
             if (toolCall.method == "scene/modify_node")
             {
-                string prop = ExtractParam(toolJson, "property");
-                string val = ExtractParam(toolJson, "value");
-                if (prop == "add_component") return $"<color=#00FF00>+ Add Component:</color> {val} on {ExtractParam(toolJson, "path")}";
-                if (prop == "remove_component") return $"<color=#FF0000>- Remove Component:</color> {val} from {ExtractParam(toolJson, "path")}";
-                return $"<color=#FFFF00>~ Modify Node:</color> Set {prop} to '{val}' on {ExtractParam(toolJson, "path")}";
+                string prop = toolCall.@params.property;
+                string val = toolCall.@params.value;
+                if (prop == "add_component") return $"<color=#00FF00>+ Add Component:</color> {val} on {toolCall.@params.path}";
+                if (prop == "remove_component") return $"<color=#FF0000>- Remove Component:</color> {val} from {toolCall.@params.path}";
+                return $"<color=#FFFF00>~ Modify Node:</color> Set {prop} to '{val}' on {toolCall.@params.path}";
             }
             if (toolCall.method == "scene/set_component_property")
-                return $"<color=#FFFF00>~ Set Property:</color> {ExtractParam(toolJson, "component")}.{ExtractParam(toolJson, "property")} = '{ExtractParam(toolJson, "value")}' on {ExtractParam(toolJson, "path")}";
+                return $"<color=#FFFF00>~ Set Property:</color> {toolCall.@params.component}.{toolCall.@params.property} = '{toolCall.@params.value}' on {toolCall.@params.path}";
             return "Pending changes...";
         }
 
         private void ExecuteToolAndResume(MCPToolRequest toolCall, string toolJson, string uiResponse, string model, Action<string, bool> onComplete)
         {
             MCPToolRegistry.ToolResult result = null;
+            var p = toolCall.@params ?? new MCPToolParams();
 
             if (toolCall.method == "project/write_file")
             {
-                string path = ExtractParam(toolJson, "path");
-                string content = ExtractContentRaw(toolJson, "content");
-                result = MCPToolRegistry.WriteFile(path, content);
+                result = MCPToolRegistry.WriteFile(p.path, p.content);
                 onComplete?.Invoke(uiResponse + "\n\n[System]: File written. Waiting for Unity to compile...", false);
             }
             else if (toolCall.method == "project/list_directory")
-                result = MCPToolRegistry.ListDirectory(ExtractParam(toolJson, "path"));
+                result = MCPToolRegistry.ListDirectory(p.path);
             else if (toolCall.method == "project/read_file")
-                result = MCPToolRegistry.ReadFile(ExtractParam(toolJson, "path"));
+                result = MCPToolRegistry.ReadFile(p.path);
             else if (toolCall.method == "project/update_dna")
-                result = MCPToolRegistry.UpdateDNA(ExtractContentRaw(toolJson, "content"));
+                result = MCPToolRegistry.UpdateDNA(p.content);
             else if (toolCall.method == "project/inspect_asset")
-                result = MCPToolRegistry.InspectAsset(ExtractParam(toolJson, "path"));
+                result = MCPToolRegistry.InspectAsset(p.path);
             else if (toolCall.method == "scene/instantiate_node")
-                result = MCPToolRegistry.InstantiateNode(ExtractParam(toolJson, "type"), ExtractParam(toolJson, "name"));
+                result = MCPToolRegistry.InstantiateNode(p.type, p.name);
             else if (toolCall.method == "scene/modify_node")
-                result = MCPToolRegistry.ModifyNode(ExtractParam(toolJson, "path"), ExtractParam(toolJson, "property"), ExtractParam(toolJson, "value"));
+                result = MCPToolRegistry.ModifyNode(p.path, p.property, p.value);
             else if (toolCall.method == "scene/inspect_node")
-                result = MCPToolRegistry.InspectNode(ExtractParam(toolJson, "path"));
+                result = MCPToolRegistry.InspectNode(p.path);
             else if (toolCall.method == "scene/set_component_property")
-                result = MCPToolRegistry.SetComponentProperty(ExtractParam(toolJson, "path"), ExtractParam(toolJson, "component"), ExtractParam(toolJson, "property"), ExtractParam(toolJson, "value"));
+                result = MCPToolRegistry.SetComponentProperty(p.path, p.component, p.property, p.value);
             else if (toolCall.method == "editor/read_console")
                 result = MCPToolRegistry.ReadConsole();
             else
@@ -331,12 +410,11 @@ Wait for the [Observation] from the system before proceeding.";
             string observation = result.success ? result.observation : $"Error: {result.error}";
             Debug.Log($"[Omnisense] Tool Result: {(result.success ? "Success" : "Failed")}. Observation added to history.");
             _history.Add(new ChatMessage { role = "user", content = $"[Observation]\n{observation}" });
+            SaveHistory();
             
             ExecuteRequest(model, onComplete);
         }
 
-        [Serializable]
-        private class MCPToolRequest { public string method; }
 
         private string GetApiKey(string model)
         {
@@ -384,36 +462,23 @@ Wait for the [Observation] from the system before proceeding.";
 
             return null;
         }
-        private string ExtractContentRaw(string json, string key)
-        {
-            // Specifically for multiline content like scripts
-            string search = $"\"{key}\": \"";
-            int start = json.IndexOf(search);
-            if (start == -1) return null;
-            
-            start += search.Length;
-            int end = json.LastIndexOf("\"");
-            if (end <= start) return null;
-            
-            return json.Substring(start, end - start).Replace("\\n", "\n").Replace("\\\"", "\"");
+        [Serializable]
+        public class MCPToolRequest 
+        { 
+            public string method; 
+            public MCPToolParams @params;
         }
 
-        private string ExtractParam(string json, string key)
+        [Serializable]
+        public class MCPToolParams
         {
-            string search = $"\"{key}\":\"";
-            int start = json.IndexOf(search);
-            if (start == -1) 
-            {
-                search = $"\"{key}\": \"";
-                start = json.IndexOf(search);
-                if (start == -1) return null;
-            }
-            
-            start += search.Length;
-            int end = json.IndexOf("\"", start);
-            if (end == -1) return null;
-            
-            return json.Substring(start, end - start);
+            public string path;
+            public string content;
+            public string type;
+            public string name;
+            public string property;
+            public string value;
+            public string component;
         }
     }
 }

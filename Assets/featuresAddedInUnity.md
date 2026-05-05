@@ -95,3 +95,26 @@ The agent's "hands" have been specifically tuned for the Unity Editor environmen
 - **Ephemeral Tool Observations**: To prevent "Lost in the Middle" context bloat during long sessions, the orchestrator now actively prunes the context window. Once a ReAct loop completes, large `[Observation]` blocks (like 1000-line script reads) are truncated.
 - **System Prompt Re-Injection**: The orchestrator now injects a hidden format reminder at the very end of the payload array immediately before querying the API. This guarantees that strict JSON formatting instructions remain in the model's primary attention span, completely eliminating formatting hallucinations caused by prompt saturation.
 - **Robust Tool Extraction**: Upgraded the regex logic to use a three-tier fallback system, allowing the orchestrator to extract tool calls even if the LLM omits markdown closing ticks or outputs raw JSON.
+
+---
+
+## 10. Session Persistence (Phase 9)
+- **Assembly Reload Stability**: The Omnisense window now persists its state across Unity script reloads and recompilations. 
+- **Automatic Restoration**: The window stores the active `SessionId` in `EditorPrefs`. Upon reload, the UI automatically fetches the last session from the history and restores all messages, including the scroll position. This is critical for agents that modify code, as it prevents the user from having to manually reload the chat every time the AI applies a fix.
+- **Immediate Save**: New sessions are now saved immediately to the file system upon creation to ensure they can be recovered even if Unity crashes or reloads before the first message is sent.
+
+---
+
+## 11. High-Capacity Output (Phase 10)
+- **Output Limit Control**: Added `max_tokens` sliders and numeric input fields to the settings tab for all major providers (OpenAI, Anthropic, Gemini, Grok).
+- **Two-Way Binding**: The UI implements smooth two-way binding between sliders and numeric fields, with automatic clamping/capping to ensure values stay within model-safe limits.
+- **Elimination of Truncation**: By allowing users to increase `max_tokens` (Cursor-level performance), the AI agent can now generate and modify massive C# classes in a single turn without hitting the default API output caps.
+- **OpenAI Compatibility**: Updated parameter naming to `max_completion_tokens` to support newer Reasoning models (o1/o3-mini).
+
+---
+
+## 13. Safety & Extraction Integrity (Phase 12)
+- **Strongly-Typed Tool Parsing**: Migrated from fragile Regex-based JSON extraction to Unity's native `JsonUtility` with a dedicated `MCPToolParams` schema. This resolves a critical bug where C# string interpolations (e.g., `$"..."`) would prematurely truncate the AI's file-write operations.
+- **AI Stop Button**: Added a red **Stop (⏹)** button to the chat UI that appears during AI execution. It provides a hard-cancel mechanism to abort active `UnityWebRequest` calls and halt the ReAct loop instantly.
+- **Improved Multiline Handling**: The new parser flawlessly handles complex unescaping for nested quotes, literal backslashes, and varying whitespace in the AI's JSON tool calls.
+- **Dynamic Button Toggling**: The Send and Stop buttons now toggle visibility based on the agent's processing state, preventing duplicate request submissions while a task is in flight.

@@ -199,6 +199,24 @@
     color: #999;
 }
 
+.stop-button-circular {
+    width: 32px;
+    height: 32px;
+    border-radius: 16px;
+    background-color: #e81123;
+    color: white;
+    border-width: 0;
+    font-size: 14px;
+    -unity-font-style: bold;
+    -unity-text-align: middle-center;
+    padding: 0;
+}
+
+.stop-button-circular:hover {
+    background-color: #ff3344;
+    scale: 1.1;
+}
+
 .attach-button {
     background-color: transparent;
     border-width: 0;
@@ -396,4 +414,31 @@
     padding: 5px 10px;
     margin-bottom: 5px;
     white-space: normal;
+}
+
+.slider-row {
+    flex-direction: row;
+    align-items: center;
+    margin-top: 5px;
+    margin-bottom: 15px;
+}
+
+.token-slider {
+    flex-grow: 1;
+}
+
+.token-slider .unity-base-field__label {
+    display: none; /* Hide internal label to use our own */
+}
+
+.token-field {
+    width: 70px;
+    margin-left: 10px;
+}
+
+.token-field .unity-base-field__input {
+    background-color: #1a1d20;
+    border-width: 1px;
+    border-color: #212529;
+    text-align: center;
 }

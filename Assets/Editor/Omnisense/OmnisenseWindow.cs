@@ -124,6 +124,40 @@ namespace Omnisense
                 _chatHistory.Add(label);
             };
 
+            var btnCopyChat = root.Q<Button>("btn-copy-chat");
+            if (btnCopyChat != null)
+            {
+                btnCopyChat.clicked += () => {
+                    if (_currentSession == null || _currentSession.messages == null) return;
+                    System.Text.StringBuilder sb = new System.Text.StringBuilder();
+                    foreach (var msg in _currentSession.messages)
+                    {
+                        sb.AppendLine($"[{msg.sender}]");
+                        sb.AppendLine(msg.content);
+                        sb.AppendLine("----------------------------------------\n");
+                    }
+                    EditorGUIUtility.systemCopyBuffer = sb.ToString();
+                    btnCopyChat.text = "Copied!";
+                    btnCopyChat.schedule.Execute(() => btnCopyChat.text = "Copy Chat").StartingIn(1500);
+                };
+            }
+
+            var btnStop = root.Q<Button>("btn-stop");
+            if (btnStop != null)
+            {
+                btnStop.clicked += () => {
+                    AIOrchestrator.Instance.Abort();
+                    ToggleStopButton(false);
+                    if (_loadingIndicator != null)
+                    {
+                        if (_chatHistory.Contains(_loadingIndicator)) _chatHistory.Remove(_loadingIndicator);
+                        EditorApplication.update -= UpdateSpinner;
+                        _loadingIndicator = null;
+                    }
+                    AddMessageToChat("System", "AI execution aborted by user.");
+                };
+            }
+
             _chatInput.RegisterCallback<KeyDownEvent>(evt => {
                 if (evt.keyCode == KeyCode.Return) {
                     if (evt.shiftKey) {
@@ -173,7 +207,18 @@ namespace Omnisense
             root.Q<Button>("btn-save-settings").clicked += SaveSettings;
 
             // Initialize Session
-            _currentSession = OmnisenseSessionManager.CreateNewSession();
+            string lastSessionId = EditorPrefs.GetString("Omnisense_LastSessionId", "");
+            var restoredSession = OmnisenseSessionManager.GetSessionById(lastSessionId);
+            
+            if (restoredSession != null)
+            {
+                LoadSession(restoredSession);
+            }
+            else
+            {
+                _currentSession = OmnisenseSessionManager.CreateNewSession();
+                EditorPrefs.SetString("Omnisense_LastSessionId", _currentSession.id);
+            }
 
             // Initialize Model Selector
             if (_modelSelector != null)
@@ -197,8 +242,41 @@ namespace Omnisense
             // Initial refresh
             RefreshContext();
 
+            // Auto-resume AI if it was interrupted by reload
+            if (EditorPrefs.GetBool("Omnisense_AI_PendingResume", false))
+            {
+                string lastModel = EditorPrefs.GetString("Omnisense_AI_LastModel", "gpt-4o");
+                ResumeAIProcess(lastModel);
+            }
+
             // Initialize background server
             MCPServer.StartServer();
+        }
+
+        private void ResumeAIProcess(string model)
+        {
+            Debug.Log("[Omnisense] Resuming AI process after assembly reload...");
+            
+            // Add Loading Spinner
+            _loadingIndicator = new Label("⠋ Resuming Thought Process...");
+            _loadingIndicator.AddToClassList("system-message");
+            _chatHistory.Add(_loadingIndicator);
+            SafeScrollTo(_loadingIndicator);
+            EditorApplication.update += UpdateSpinner;
+            
+            ToggleStopButton(true);
+
+            AIOrchestrator.Instance.Resume(model, (response, isFinal) => {
+                if (isFinal) ToggleStopButton(false);
+                if (isFinal && _loadingIndicator != null)
+                {
+                    if (_chatHistory.Contains(_loadingIndicator)) _chatHistory.Remove(_loadingIndicator);
+                    EditorApplication.update -= UpdateSpinner;
+                    _loadingIndicator = null;
+                }
+                AddMessageToChat("AI", response);
+                if (isFinal) Debug.Log("[Omnisense] Auto-Resume completed successfully.");
+            });
         }
 
         private void RefreshContext()
@@ -324,6 +402,12 @@ namespace Omnisense
             EditorPrefs.SetString("Omnisense_Anthropic_Key", rootVisualElement.Q<TextField>("anthropic-key").value);
             EditorPrefs.SetString("Omnisense_Gemini_Key", rootVisualElement.Q<TextField>("gemini-key").value);
             EditorPrefs.SetString("Omnisense_Grok_Key", rootVisualElement.Q<TextField>("grok-key").value);
+            
+            EditorPrefs.SetInt("Omnisense_OpenAI_MaxTokens", rootVisualElement.Q<SliderInt>("openai-max-tokens-slider").value);
+            EditorPrefs.SetInt("Omnisense_Anthropic_MaxTokens", rootVisualElement.Q<SliderInt>("anthropic-max-tokens-slider").value);
+            EditorPrefs.SetInt("Omnisense_Gemini_MaxTokens", rootVisualElement.Q<SliderInt>("gemini-max-tokens-slider").value);
+            EditorPrefs.SetInt("Omnisense_Grok_MaxTokens", rootVisualElement.Q<SliderInt>("grok-max-tokens-slider").value);
+
             Debug.Log("[Omnisense] Settings saved.");
         }
 
@@ -333,6 +417,47 @@ namespace Omnisense
             rootVisualElement.Q<TextField>("anthropic-key").value = EditorPrefs.GetString("Omnisense_Anthropic_Key", "");
             rootVisualElement.Q<TextField>("gemini-key").value = EditorPrefs.GetString("Omnisense_Gemini_Key", "");
             rootVisualElement.Q<TextField>("grok-key").value = EditorPrefs.GetString("Omnisense_Grok_Key", "");
+
+            BindTokenControls("openai", 4096, 1, 16384);
+            BindTokenControls("anthropic", 4096, 1, 8192);
+            BindTokenControls("gemini", 4096, 1, 8192);
+            BindTokenControls("grok", 4096, 1, 8192);
+        }
+
+        private void BindTokenControls(string prefix, int defaultVal, int min, int max)
+        {
+            var slider = rootVisualElement.Q<SliderInt>($"{prefix}-max-tokens-slider");
+            var field = rootVisualElement.Q<IntegerField>($"{prefix}-max-tokens-field");
+            
+            int saved = EditorPrefs.GetInt($"Omnisense_{char.ToUpper(prefix[0]) + prefix.Substring(1)}_MaxTokens", defaultVal);
+            slider.value = saved;
+            field.value = saved;
+
+            slider.RegisterValueChangedCallback(evt => field.value = evt.newValue);
+            field.RegisterValueChangedCallback(evt => {
+                int val = Mathf.Clamp(evt.newValue, min, max);
+                if (val != evt.newValue) field.value = val;
+                slider.value = val;
+            });
+        }
+
+        private void ToggleStopButton(bool isProcessing)
+        {
+            var btnStop = rootVisualElement.Q<Button>("btn-stop");
+            var btnSend = rootVisualElement.Q<Button>("send-button");
+            if (btnStop != null && btnSend != null)
+            {
+                if (isProcessing)
+                {
+                    btnStop.RemoveFromClassList("hidden");
+                    btnSend.AddToClassList("hidden");
+                }
+                else
+                {
+                    btnStop.AddToClassList("hidden");
+                    btnSend.RemoveFromClassList("hidden");
+                }
+            }
         }
 
         private void SendMessage()
@@ -358,8 +483,11 @@ namespace Omnisense
             _chatHistory.Add(_loadingIndicator);
             SafeScrollTo(_loadingIndicator);
             EditorApplication.update += UpdateSpinner;
+            
+            ToggleStopButton(true);
 
             AIOrchestrator.Instance.ProcessPrompt(contextText + text, _modelSelector.value, (response, isFinal) => {
+                if (isFinal) ToggleStopButton(false);
                 if (isFinal && _loadingIndicator != null)
                 {
                     if (_chatHistory.Contains(_loadingIndicator)) _chatHistory.Remove(_loadingIndicator);
@@ -656,6 +784,7 @@ namespace Omnisense
         private void LoadSession(ChatSession session)
         {
             _currentSession = session;
+            EditorPrefs.SetString("Omnisense_LastSessionId", session.id);
             _chatHistory.Clear();
             
             VisualElement last = null;
