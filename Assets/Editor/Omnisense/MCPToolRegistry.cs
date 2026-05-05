@@ -273,6 +273,48 @@ namespace Omnisense
                 return new ToolResult { success = false, error = e.Message };
             }
         }
+
+        public static ToolResult EditFile(string path, string searchBlock, string replaceBlock)
+        {
+            Debug.Log($"[Omnisense] Tool: EditFile(path='{path}')");
+            try
+            {
+                string fullPath = Path.Combine(Application.dataPath, "..", path);
+                if (!File.Exists(fullPath))
+                {
+                    return new ToolResult { success = false, error = $"File not found: {path}. Cannot edit a non-existent file. Use project/write_file instead." };
+                }
+
+                if (string.IsNullOrEmpty(searchBlock))
+                {
+                    return new ToolResult { success = false, error = "search_block cannot be empty." };
+                }
+
+                string content = File.ReadAllText(fullPath);
+                
+                // Normalize line endings to make searching more robust across OS types
+                string normalizedContent = content.Replace("\r\n", "\n");
+                string normalizedSearch = searchBlock.Replace("\r\n", "\n");
+
+                if (!normalizedContent.Contains(normalizedSearch))
+                {
+                    return new ToolResult { success = false, error = "Error: search_block not found in file. Please ensure exact string matching (including whitespace)." };
+                }
+
+                // Register undo before applying changes
+                OmnisenseUndoManager.RegisterFileBackup(fullPath, false);
+
+                string newContent = normalizedContent.Replace(normalizedSearch, replaceBlock.Replace("\r\n", "\n"));
+                File.WriteAllText(fullPath, newContent);
+                AssetDatabase.Refresh();
+
+                return new ToolResult { success = true, observation = $"Successfully edited file: {path}" };
+            }
+            catch (Exception e)
+            {
+                return new ToolResult { success = false, error = e.Message };
+            }
+        }
         public static ToolResult SetComponentProperty(string path, string componentName, string property, string value)
         {
             Debug.Log($"[Omnisense] Tool: SetComponentProperty(path='{path}', component='{componentName}', property='{property}', value='{value}')");

@@ -104,12 +104,13 @@ Available Tools:
 2. project/read_file (params: ""path"") - Reads the contents of a text file.
 3. project/update_dna (params: ""content"") - Updates the .omnisense_dna.md file. Use this to persist architectural rules, naming conventions, and project knowledge.
 4. project/inspect_asset (params: ""path"") - Reads metadata/properties of Prefabs, Materials, etc.
-5. project/write_file (params: ""path"", ""content"") - Creates/overwrites a file.
-6. scene/instantiate_node (params: ""type"", ""name"") - Creates a GameObject. 'type' can be a primitive (Cube, Sphere, Capsule, Cylinder, Plane, Quad) or 'GameObject' for an empty object.
-7. scene/modify_node (params: ""path"", ""property"", ""value"") - Edits a GameObject (name, position, add_component, remove_component).
-8. scene/inspect_node (params: ""path"") - Returns an object's components.
-9. scene/set_component_property (params: ""path"", ""component"", ""property"", ""value"") - Sets a property on a component.
-10. editor/read_console (params: none) - Returns the latest 30 warnings/errors.
+5. project/write_file (params: ""path"", ""content"") - Creates a NEW file. DO NOT use this for modifying existing files unless you are completely rewriting them.
+6. project/edit_file (params: ""path"", ""search_block"", ""replace_block"") - Fast O(1) editing for existing files. Use this to modify existing code. 'search_block' MUST be an exact string match (including whitespace) of the code you want to replace.
+7. scene/instantiate_node (params: ""type"", ""name"") - Creates a GameObject. 'type' can be a primitive (Cube, Sphere, Capsule, Cylinder, Plane, Quad) or 'GameObject' for an empty object.
+8. scene/modify_node (params: ""path"", ""property"", ""value"") - Edits a GameObject (name, position, add_component, remove_component).
+9. scene/inspect_node (params: ""path"") - Returns an object's components.
+10. scene/set_component_property (params: ""path"", ""component"", ""property"", ""value"") - Sets a property on a component.
+11. editor/read_console (params: none) - Returns the latest 30 warnings/errors.
 
 Wait for the [Observation] from the system before proceeding.";
 
@@ -389,6 +390,7 @@ Wait for the [Observation] from the system before proceeding.";
                     var toolCall = JsonUtility.FromJson<MCPToolRequest>(toolJson);
                     
                     bool isDestructive = toolCall.method == "project/write_file" ||
+                                         toolCall.method == "project/edit_file" ||
                                          toolCall.method == "scene/instantiate_node" ||
                                          toolCall.method == "scene/modify_node" ||
                                          toolCall.method == "scene/set_component_property";
@@ -495,6 +497,11 @@ Wait for the [Observation] from the system before proceeding.";
                 result = MCPToolRegistry.WriteFile(p.path, p.content);
                 onComplete?.Invoke(uiResponse + "\n\n[System]: File written. Waiting for Unity to compile...", false);
             }
+            else if (toolCall.method == "project/edit_file")
+            {
+                result = MCPToolRegistry.EditFile(p.path, p.search_block, p.replace_block);
+                onComplete?.Invoke(uiResponse + "\n\n[System]: File edited. Waiting for Unity to compile...", false);
+            }
             else if (toolCall.method == "project/list_directory")
                 result = MCPToolRegistry.ListDirectory(p.path);
             else if (toolCall.method == "project/read_file")
@@ -588,6 +595,8 @@ Wait for the [Observation] from the system before proceeding.";
             public string property;
             public string value;
             public string component;
+            public string search_block;
+            public string replace_block;
         }
     }
 }
