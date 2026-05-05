@@ -204,7 +204,12 @@ namespace Omnisense
 
             // Settings Persistence
             LoadSettings();
-            root.Q<Button>("btn-save-settings").clicked += SaveSettings;
+            
+            // Auto-save API keys on change
+            root.Q<TextField>("openai-key").RegisterValueChangedCallback(_ => SaveSettings());
+            root.Q<TextField>("anthropic-key").RegisterValueChangedCallback(_ => SaveSettings());
+            root.Q<TextField>("gemini-key").RegisterValueChangedCallback(_ => SaveSettings());
+            root.Q<TextField>("grok-key").RegisterValueChangedCallback(_ => SaveSettings());
 
             // Initialize Session
             string lastSessionId = EditorPrefs.GetString("Omnisense_LastSessionId", "");
@@ -429,15 +434,24 @@ namespace Omnisense
             var slider = rootVisualElement.Q<SliderInt>($"{prefix}-max-tokens-slider");
             var field = rootVisualElement.Q<IntegerField>($"{prefix}-max-tokens-field");
             
-            int saved = EditorPrefs.GetInt($"Omnisense_{char.ToUpper(prefix[0]) + prefix.Substring(1)}_MaxTokens", defaultVal);
+            // Fix naming mismatch: openai -> OpenAI, anthropic -> Anthropic, etc.
+            string keyPart = prefix;
+            if (prefix == "openai") keyPart = "OpenAI";
+            else keyPart = char.ToUpper(prefix[0]) + prefix.Substring(1);
+
+            int saved = EditorPrefs.GetInt($"Omnisense_{keyPart}_MaxTokens", defaultVal);
             slider.value = saved;
             field.value = saved;
 
-            slider.RegisterValueChangedCallback(evt => field.value = evt.newValue);
+            slider.RegisterValueChangedCallback(evt => {
+                field.value = evt.newValue;
+                SaveSettings();
+            });
             field.RegisterValueChangedCallback(evt => {
                 int val = Mathf.Clamp(evt.newValue, min, max);
                 if (val != evt.newValue) field.value = val;
                 slider.value = val;
+                SaveSettings();
             });
         }
 
