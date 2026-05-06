@@ -138,3 +138,12 @@ The agent's "hands" have been specifically tuned for the Unity Editor environmen
 - **Scene-to-Asset Workflow**: Implemented the `project/create_prefab` tool, allowing the agent to save scene GameObjects as project assets (`.prefab`). This mimics the "drag-and-drop" developer workflow for asset creation.
 - **Tag & Layer Management**: Upgraded the `scene/modify_node` tool to support the `tag` and `layer` properties. The agent can now organize objects into collision layers or tag them for gameplay logic (e.g., tagging an object as "Enemy" or "Player").
 - **Automatic Directory Creation**: The prefab tool automatically creates parent directories if the specified destination path does not exist, ensuring a clean project structure.
+
+---
+
+## 17. SOTA Context Management: Sliding Window & Bi-Directional Pruning (Phase 16)
+- **High-Reasoning Sliding Window**: Implemented an advanced history management system that keeps the **System Prompt (Tool Definitions)** and **Project DNA** at indices 0 and 1, while discarding stale conversation turns in the middle. This keeps the "Message Count" low (under 25), preventing "Lost in the Middle" errors and ensuring the agent never forgets its specialized Unity tools.
+- **Bi-Directional Pruning**: Unlike standard agents that only prune user observations, Omnisense now prunes the **Assistant's own output**. Large C# code blocks written 10+ turns ago are truncated, preventing the agent from being "distracted" by its own previous code successes and forcing it to re-evaluate the current toolset.
+- **Tool Discovery Restoration**: By maintaining a lean context window, the model's attention is consistently returned to the Tool List, resolving the bug where the AI would default to `write_file` for tasks that required specialized tools like Tags or Layers.
+- **Memory Integrity**: The sliding window is "System Aware," meaning it never discards architecturally critical instructions or DNA, ensuring the agent stays "Senior" even in 100+ turn sessions.
+

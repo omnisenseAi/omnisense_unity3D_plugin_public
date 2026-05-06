@@ -10,6 +10,7 @@ namespace Omnisense
     public static class MCPToolRegistry
     {
         private static List<string> _consoleLogs = new List<string>();
+        private static string _lastNativeError = null;
 
         static MCPToolRegistry()
         {
@@ -22,6 +23,8 @@ namespace Omnisense
             if (type == LogType.Error || type == LogType.Exception || type == LogType.Warning)
             {
                 if (logString.StartsWith("[Omnisense]")) return; // Ignore our own debug logs
+
+                if (type != LogType.Warning) _lastNativeError = logString;
 
                 string logEntry = $"[{type}] {logString}";
                 _consoleLogs.Add(logEntry);
@@ -426,6 +429,7 @@ namespace Omnisense
         public static ToolResult ModifyNode(string path, string property, string value)
         {
             Debug.Log($"[Omnisense] Tool: ModifyNode(path='{path}', property='{property}', value='{value}')");
+            _lastNativeError = null; // Reset error tracker
             // Must be called on main thread
             try
             {
@@ -493,6 +497,11 @@ namespace Omnisense
                     int layer = LayerMask.NameToLayer(value);
                     if (layer == -1) return new ToolResult { success = false, error = $"Layer '{value}' does not exist. Use a valid Unity layer." };
                     obj.layer = layer;
+                }
+
+                if (!string.IsNullOrEmpty(_lastNativeError))
+                {
+                    return new ToolResult { success = false, error = $"Unity Engine Error: {_lastNativeError}" };
                 }
 
                 return new ToolResult { success = true, observation = $"Modified {property} of {path} to {value}" };

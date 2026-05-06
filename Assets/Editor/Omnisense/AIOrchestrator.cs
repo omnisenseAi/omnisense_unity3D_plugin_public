@@ -43,6 +43,9 @@ namespace Omnisense
         private List<ChatMessage> _history = new List<ChatMessage>();
         private int _turnToolCount = 0;
         private bool _isReflecting = false;
+        private int _stepCount = 0;
+        private const int MAX_STEPS = 10;
+        private List<string> _actionHistory = new List<string>();
 
         [Serializable]
         private class HistoryWrapper { public List<ChatMessage> list; }
@@ -122,6 +125,8 @@ Wait for the [Observation] from the system before proceeding.";
             _turnToolCount = 0;
             _isReflecting = false;
             _isAborted = false;
+            _stepCount = 0;
+            _actionHistory.Clear();
             OmnisenseUndoManager.StartTurn(turnId);
             
             if (_history.Count == 0)
@@ -148,8 +153,11 @@ Wait for the [Observation] from the system before proceeding.";
             ExecuteRequest(model, onComplete);
         }
 
+
         private void ExecuteRequest(string model, Action<string, bool> onComplete)
         {
+            PruneHistory();
+
             string apiKey = GetApiKey(model);
             if (string.IsNullOrEmpty(apiKey))
             {
@@ -239,7 +247,6 @@ Wait for the [Observation] from the system before proceeding.";
             var operation = _activeRequest.SendWebRequest();
             operation.completed += (op) =>
             {
-                if (_isAborted) return;
                 if (_activeRequest == null) return;
                 
                 if (_activeRequest.result == UnityWebRequest.Result.Success)
@@ -248,10 +255,16 @@ Wait for the [Observation] from the system before proceeding.";
                     string responseText = ExtractContent(_activeRequest.downloadHandler.text);
                     HandleResponse(responseText, model, onComplete);
                 }
-                else
+                else if (_activeRequest.result == UnityWebRequest.Result.ConnectionError || _activeRequest.result == UnityWebRequest.Result.ProtocolError)
                 {
-                    Debug.LogError($"[Omnisense] API Error: {_activeRequest.error}");
-                    onComplete?.Invoke($"API Error: {_activeRequest.error}\n{_activeRequest.downloadHandler.text}", true);
+                    string errorDetail = "";
+                    try { errorDetail = _activeRequest.downloadHandler?.text ?? ""; } catch { }
+                    Debug.LogError($"[Omnisense] API Error: {_activeRequest.error}\n{errorDetail}");
+                    onComplete?.Invoke($"[System Error]: API Request failed ({_activeRequest.result}).\nDetails: {_activeRequest.error}\n{errorDetail}", true);
+                }
+                else 
+                {
+                    onComplete?.Invoke($"[System Error]: Unexpected API failure ({_activeRequest.result}).", true);
                 }
                 _activeRequest.Dispose();
                 _activeRequest = null;
@@ -295,8 +308,12 @@ Wait for the [Observation] from the system before proceeding.";
                     // Simple extraction for now
                     var match = Regex.Match(resp, "\"text\":\"(.*?)\"", RegexOptions.Singleline);
                     HandleResponse(match.Success ? match.Groups[1].Value.Replace("\\n", "\n").Replace("\\\"", "\"") : resp, model, onComplete);
+                } else if (_activeRequest.result == UnityWebRequest.Result.ConnectionError || _activeRequest.result == UnityWebRequest.Result.ProtocolError) {
+                    string errorDetail = "";
+                    try { errorDetail = _activeRequest.downloadHandler?.text ?? ""; } catch { }
+                    onComplete?.Invoke($"Anthropic Error: {_activeRequest.error}\n{errorDetail}", true);
                 } else {
-                    onComplete?.Invoke($"Anthropic Error: {_activeRequest.error}\n{_activeRequest.downloadHandler.text}", true);
+                    onComplete?.Invoke($"Anthropic Error: Unexpected failure ({_activeRequest.result})", true);
                 }
                 _activeRequest?.Dispose(); _activeRequest = null;
             };
@@ -334,8 +351,12 @@ Wait for the [Observation] from the system before proceeding.";
                     string resp = _activeRequest.downloadHandler.text;
                     var match = Regex.Match(resp, "\"text\":\\s*\"(.*?)\"", RegexOptions.Singleline);
                     HandleResponse(match.Success ? match.Groups[1].Value.Replace("\\n", "\n").Replace("\\\"", "\"") : resp, model, onComplete);
+                } else if (_activeRequest.result == UnityWebRequest.Result.ConnectionError || _activeRequest.result == UnityWebRequest.Result.ProtocolError) {
+                    string errorDetail = "";
+                    try { errorDetail = _activeRequest.downloadHandler?.text ?? ""; } catch { }
+                    onComplete?.Invoke($"Gemini Error: {_activeRequest.error}\n{errorDetail}", true);
                 } else {
-                    onComplete?.Invoke($"Gemini Error: {_activeRequest.error}\n{_activeRequest.downloadHandler.text}", true);
+                    onComplete?.Invoke($"Gemini Error: Unexpected failure ({_activeRequest.result})", true);
                 }
                 _activeRequest?.Dispose(); _activeRequest = null;
             };
@@ -364,8 +385,12 @@ Wait for the [Observation] from the system before proceeding.";
                 if (_activeRequest.result == UnityWebRequest.Result.Success) {
                     string responseText = ExtractContent(_activeRequest.downloadHandler.text);
                     HandleResponse(responseText, model, onComplete);
+                } else if (_activeRequest.result == UnityWebRequest.Result.ConnectionError || _activeRequest.result == UnityWebRequest.Result.ProtocolError) {
+                    string errorDetail = "";
+                    try { errorDetail = _activeRequest.downloadHandler?.text ?? ""; } catch { }
+                    onComplete?.Invoke($"Grok Error: {_activeRequest.error}\n{errorDetail}", true);
                 } else {
-                    onComplete?.Invoke($"Grok Error: {_activeRequest.error}\n{_activeRequest.downloadHandler.text}", true);
+                    onComplete?.Invoke($"Grok Error: Unexpected failure ({_activeRequest.result})", true);
                 }
                 _activeRequest?.Dispose(); _activeRequest = null;
             };
@@ -455,19 +480,52 @@ Wait for the [Observation] from the system before proceeding.";
 
         private void PruneHistory()
         {
-            // Truncate large tool observations to prevent Context Bloat, BUT 
-            // only prune observations that are older than 10 messages so the agent retains recent context!
-            int preserveCount = 10;
-            int limit = Mathf.Max(0, _history.Count - preserveCount);
-            
-            for (int i = 0; i < limit; i++)
+            // 1. SOTA SLIDING WINDOW: Keep System Prompts (DNA/System) and the last N messages.
+            // This prevents "Lost in the Middle" errors and ensures Tool Definitions (index 0) stay in the attention span.
+            int preserveRecentCount = 20; 
+            if (_history.Count > preserveRecentCount + 5) // Only prune if we have a significant buffer
             {
-                if (_history[i].role == "user" && _history[i].content.StartsWith("[Observation]") && _history[i].content.Length > 250)
+                List<ChatMessage> optimizedHistory = new List<ChatMessage>();
+                
+                // Always keep the System Prompt (Tool Definitions) and Project DNA
+                foreach (var msg in _history) {
+                    if (msg.role == "system") optimizedHistory.Add(msg);
+                }
+                
+                // Keep the last N messages for immediate task context
+                int startIdx = Mathf.Max(0, _history.Count - preserveRecentCount);
+                for (int i = startIdx; i < _history.Count; i++) {
+                    if (_history[i].role != "system") optimizedHistory.Add(_history[i]);
+                }
+                
+                int removedCount = _history.Count - optimizedHistory.Count;
+                _history = optimizedHistory;
+                if (removedCount > 0) Debug.Log($"[Omnisense] Sliding Window active: Removed {removedCount} messages to optimize reasoning.");
+            }
+
+            // 2. BI-DIRECTIONAL CONTENT PRUNING: Truncate large blocks in BOTH User and Assistant roles.
+            // This stops the Assistant's own massive code writes from bloating the context window.
+            for (int i = 0; i < _history.Count; i++)
+            {
+                // Never prune System prompts or the most recent 6 messages (for conversational coherence)
+                if (_history[i].role == "system" || i > _history.Count - 6) continue;
+
+                if (_history[i].content.Length > 500)
                 {
-                    _history[i].content = "[Observation]\n(Output truncated after turn completion to preserve context window).";
+                    // Prune User Observations (Reads)
+                    if (_history[i].role == "user" && _history[i].content.StartsWith("[Observation]"))
+                    {
+                        _history[i].content = "[Observation]\n(Output truncated to preserve context window).";
+                    }
+                    // Prune Assistant Content (Writes) - CRITICAL for tool discovery
+                    else if (_history[i].role == "assistant")
+                    {
+                        string snippet = _history[i].content.Substring(0, 300);
+                        _history[i].content = $"{snippet}...\n\n(Previous large output/code truncated to prevent context saturation).";
+                    }
                 }
             }
-            Debug.Log("[Omnisense] Context window pruned for next turn.");
+            // Debug.Log("[Omnisense] Context optimized for tool discovery.");
         }
 
         private string GenerateDiffSummary(MCPToolRequest toolCall, string toolJson)
@@ -493,6 +551,32 @@ Wait for the [Observation] from the system before proceeding.";
 
         private void ExecuteToolAndResume(MCPToolRequest toolCall, string toolJson, string uiResponse, string model, Action<string, bool> onComplete)
         {
+            _stepCount++;
+            if (_stepCount > MAX_STEPS)
+            {
+                string limitMsg = "\n\n[System Warning]: Maximum tool iterations (10) reached for this turn. To prevent an infinite loop, I have paused execution. Please review my progress and provide further instructions.";
+                onComplete?.Invoke(uiResponse + limitMsg, true);
+                _history.Add(new ChatMessage { role = "assistant", content = "I have reached my tool execution limit for this turn. Pausing for user feedback." });
+                SaveHistory();
+                return;
+            }
+
+            // Loop Detection
+            string actionSignature = $"{toolCall.method}:{JsonUtility.ToJson(toolCall.@params)}";
+            _actionHistory.Add(actionSignature);
+            if (_actionHistory.Count >= 3)
+            {
+                int n = _actionHistory.Count;
+                if (_actionHistory[n-1] == _actionHistory[n-2] && _actionHistory[n-2] == _actionHistory[n-3])
+                {
+                    string loopMsg = "\n\n[System Warning]: Loop detected! You have attempted the exact same action 3 times. Change your strategy or ask the user for help.";
+                    onComplete?.Invoke(uiResponse + loopMsg, true);
+                    _history.Add(new ChatMessage { role = "user", content = "[System]: Loop detected. You must change your approach." });
+                    SaveHistory();
+                    return;
+                }
+            }
+
             MCPToolRegistry.ToolResult result = null;
             var p = toolCall.@params ?? new MCPToolParams();
 
