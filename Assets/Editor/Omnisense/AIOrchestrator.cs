@@ -128,7 +128,8 @@ Wait for the [Observation] from the system before proceeding.";
 
         public void ProcessPrompt(string prompt, string model, string turnId, Action<string, bool> onComplete)
         {
-            Debug.Log($"[Omnisense] Processing prompt with model: {model}");
+            Debug.Log($"[Omnisense-Diagnostics] --- NEW TURN STARTED: {turnId} ---");
+            Debug.Log($"[Omnisense-Diagnostics] Processing prompt (Length: {prompt?.Length ?? 0} chars) with model: {model}");
             _turnToolCount = 0;
             _isReflecting = false;
             _isAborted = false;
@@ -138,6 +139,7 @@ Wait for the [Observation] from the system before proceeding.";
             
             if (_history.Count == 0)
             {
+                Debug.Log("[Omnisense-Diagnostics] Initializing fresh context with SYSTEM_PROMPT.");
                 _history.Add(new ChatMessage { role = "system", content = SYSTEM_PROMPT });
                 
                 // Load Project DNA if exists
@@ -146,9 +148,18 @@ Wait for the [Observation] from the system before proceeding.";
                     if (System.IO.File.Exists(dnaPath)) {
                         string dnaContent = System.IO.File.ReadAllText(dnaPath);
                         _history.Add(new ChatMessage { role = "system", content = $"[PROJECT DNA]\nThis is the persistent memory of this project. Conform to these architectural rules:\n\n{dnaContent}" });
-                        Debug.Log("[Omnisense] Project DNA loaded and injected into context.");
+                        Debug.Log($"[Omnisense-Diagnostics] Project DNA loaded ({dnaContent.Length} chars).");
                     }
                 } catch { }
+            }
+            else
+            {
+                // Force-update the SYSTEM_PROMPT to ensure any newly compiled tools are available
+                if (_history[0].role == "system" && !_history[0].content.StartsWith("[PROJECT DNA]"))
+                {
+                    Debug.Log("[Omnisense-Diagnostics] Force-updating SYSTEM_PROMPT in existing history to guarantee latest tool definitions.");
+                    _history[0].content = SYSTEM_PROMPT;
+                }
             }
             _history.Add(new ChatMessage { role = "user", content = prompt });
             SaveHistory();
@@ -157,21 +168,25 @@ Wait for the [Observation] from the system before proceeding.";
 
         public void Resume(string model, Action<string, bool> onComplete)
         {
+            Debug.Log($"[Omnisense-Diagnostics] Resuming execution with model: {model}");
             ExecuteRequest(model, onComplete);
         }
 
-
         private void ExecuteRequest(string model, Action<string, bool> onComplete)
         {
+            Debug.Log($"[Omnisense-Diagnostics] ExecuteRequest invoked. History count before prune: {_history.Count}");
             PruneHistory();
+            Debug.Log($"[Omnisense-Diagnostics] History count after prune: {_history.Count}. Retrieving API Key...");
 
             string apiKey = GetApiKey(model);
             if (string.IsNullOrEmpty(apiKey))
             {
+                Debug.LogError("[Omnisense-Diagnostics] API Key is missing or empty.");
                 onComplete?.Invoke("Error: API Key missing. Please set it in the Settings tab.", true);
                 return;
             }
 
+            Debug.Log($"[Omnisense-Diagnostics] Dispatching payload to provider...");
             // Set pending state to allow auto-resume after assembly reload
             EditorPrefs.SetBool("Omnisense_AI_PendingResume", true);
             EditorPrefs.SetString("Omnisense_AI_LastModel", model);
@@ -231,12 +246,9 @@ Wait for the [Observation] from the system before proceeding.";
         private void CallOpenAI(string apiKey, string model, Action<string, bool> onComplete)
         {
             if (_isAborted) return;
-            // Prevent 'Lost in the Middle' by injecting a trailing format reminder
+            // We previously injected an aggressive format reminder here, but it caused the LLM 
+            // to hallucinate endless tool calls because it thought it was forced to output JSON.
             var payloadMessages = new List<ChatMessage>(_history);
-            payloadMessages.Add(new ChatMessage { 
-                role = "user", 
-                content = "[System Reminder: You must use the exact ```mcp_json {\"method\":\"...\",\"params\":{...}} ``` format for any tool calls. Do NOT forget the closing backticks.]" 
-            });
 
             int maxTokens = EditorPrefs.GetInt("Omnisense_OpenAI_MaxTokens", 4096);
             var requestData = new OpenAIRequest { model = model, messages = payloadMessages, max_completion_tokens = maxTokens };
@@ -470,6 +482,7 @@ Wait for the [Observation] from the system before proceeding.";
                     _isReflecting = true;
                     _history.Add(new ChatMessage { role = "user", content = "[System Audit]: Actions complete. Review your changes: Are there any null references, missing components, or obvious next steps (like scene wiring) to make this feature fully functional? If yes, execute them. If no, summarize your work to the user (be sure to highlight any proactive steps you took)." });
                     SaveHistory();
+                    onComplete?.Invoke(response + "\n\n[System]: Auditing changes and finalizing...", false);
                     ExecuteRequest(model, onComplete);
                 }
                 else
@@ -640,6 +653,10 @@ Wait for the [Observation] from the system before proceeding.";
             Debug.Log($"[Omnisense] Tool Result: {(result.success ? "Success" : "Failed")}. Observation added to history.");
             _history.Add(new ChatMessage { role = "user", content = $"[Observation]\n{observation}" });
             SaveHistory();
+            
+            if (toolCall.method != "project/write_file" && toolCall.method != "project/edit_file") {
+                onComplete?.Invoke(uiResponse + "\n\n[System]: Tool executed. Analyzing results...", false);
+            }
             
             ExecuteRequest(model, onComplete);
         }
