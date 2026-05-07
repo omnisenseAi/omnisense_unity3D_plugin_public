@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using UnityEditor;
 using UnityEngine;
 
@@ -38,6 +39,73 @@ namespace Omnisense
             public bool success;
             public string observation;
             public string error;
+        }
+
+        public static ToolResult SearchAssets(string query)
+        {
+            Debug.Log($"[Omnisense] Tool: SearchAssets(query='{query}')");
+            try
+            {
+                string[] guids = AssetDatabase.FindAssets(query);
+                List<string> paths = guids.Select(AssetDatabase.GUIDToAssetPath).ToList();
+                return new ToolResult { success = true, observation = $"Found {paths.Count} assets:\n" + string.Join("\n", paths) };
+            }
+            catch (Exception e) { return new ToolResult { success = false, error = e.Message }; }
+        }
+
+        public static ToolResult InspectPlayerSettings()
+        {
+            Debug.Log($"[Omnisense] Tool: InspectPlayerSettings()");
+            string info = $"Product Name: {PlayerSettings.productName}\n" +
+                          $"Bundle ID: {PlayerSettings.applicationIdentifier}\n" +
+                          $"Scripting Backend: {PlayerSettings.GetScriptingBackend(BuildTargetGroup.Standalone)}\n" +
+                          $"API Compatibility: {PlayerSettings.GetApiCompatibilityLevel(BuildTargetGroup.Standalone)}\n" +
+                          $"Scripting Defines: {PlayerSettings.GetScriptingDefineSymbolsForGroup(BuildTargetGroup.Standalone)}";
+            return new ToolResult { success = true, observation = info };
+        }
+
+        public static ToolResult ListPackages()
+        {
+            Debug.Log($"[Omnisense] Tool: ListPackages()");
+            string manifestPath = Path.Combine(Application.dataPath, "..", "Packages", "manifest.json");
+            if (!File.Exists(manifestPath)) return new ToolResult { success = false, error = "Manifest not found." };
+            return new ToolResult { success = true, observation = File.ReadAllText(manifestPath) };
+        }
+
+        public static ToolResult ListAllNodes()
+        {
+            Debug.Log($"[Omnisense] Tool: ListAllNodes()");
+            var rootObjects = UnityEngine.SceneManagement.SceneManager.GetActiveScene().GetRootGameObjects();
+            string names = string.Join(", ", rootObjects.Select(o => o.name));
+            return new ToolResult { success = true, observation = $"Root GameObjects: {names}" };
+        }
+
+        public static ToolResult InspectBuildSettings()
+        {
+            Debug.Log("[Omnisense] Tool: InspectBuildSettings()");
+            try {
+                var scenes = EditorBuildSettings.scenes;
+                List<string> sceneInfo = new List<string>();
+                foreach (var scene in scenes) {
+                    sceneInfo.Add($"{(scene.enabled ? "[Enabled]" : "[Disabled]")} {scene.path}");
+                }
+                string target = EditorUserBuildSettings.activeBuildTarget.ToString();
+                return new ToolResult { success = true, observation = $"Target Platform: {target}\nScenes in Build:\n" + string.Join("\n", sceneInfo) };
+            } catch (Exception e) {
+                return new ToolResult { success = false, error = e.Message };
+            }
+        }
+
+        public static ToolResult GetAssetGUID(string path)
+        {
+            Debug.Log($"[Omnisense] Tool: GetAssetGUID(path='{path}')");
+            try {
+                string guid = AssetDatabase.AssetPathToGUID(path);
+                if (string.IsNullOrEmpty(guid)) return new ToolResult { success = false, error = "Asset not found or does not have a GUID." };
+                return new ToolResult { success = true, observation = $"GUID for {path}: {guid}" };
+            } catch (Exception e) {
+                return new ToolResult { success = false, error = e.Message };
+            }
         }
 
         public static ToolResult ReadConsole()
@@ -529,10 +597,12 @@ namespace Omnisense
                     compDetails.Add(comp.GetType().Name);
                 }
 
+                string resultStr = $"GameObject '{obj.name}' at position {obj.transform.position}. Tag: {obj.tag}, Layer: {LayerMask.LayerToName(obj.layer)}. Attached Components: " + string.Join(", ", compDetails);
+                Debug.Log($"[Omnisense] InspectNode Result: {resultStr}");
                 return new ToolResult 
                 { 
                     success = true, 
-                    observation = $"GameObject '{obj.name}' at position {obj.transform.position}. Attached Components: " + string.Join(", ", compDetails) 
+                    observation = resultStr 
                 };
             }
             catch (Exception e)
@@ -617,6 +687,43 @@ namespace Omnisense
 
                 tagManager.ApplyModifiedProperties();
                 return new ToolResult { success = true, observation = $"Successfully created {type}: {name}" };
+            }
+            catch (Exception e)
+            {
+                return new ToolResult { success = false, error = e.Message };
+            }
+        }
+
+        public static ToolResult ListTagsAndLayers()
+        {
+            Debug.Log("[Omnisense] Tool: ListTagsAndLayers()");
+            try
+            {
+                UnityEngine.Object[] asset = AssetDatabase.LoadAllAssetsAtPath("ProjectSettings/TagManager.asset");
+                if (asset == null || asset.Length == 0) return new ToolResult { success = false, error = "TagManager.asset not found." };
+
+                SerializedObject tagManager = new SerializedObject(asset[0]);
+                
+                // List Tags
+                SerializedProperty tagsProp = tagManager.FindProperty("tags");
+                List<string> tags = new List<string>();
+                for (int i = 0; i < tagsProp.arraySize; i++)
+                {
+                    string tag = tagsProp.GetArrayElementAtIndex(i).stringValue;
+                    if (!string.IsNullOrEmpty(tag)) tags.Add(tag);
+                }
+
+                // List Layers
+                SerializedProperty layersProp = tagManager.FindProperty("layers");
+                List<string> layers = new List<string>();
+                for (int i = 0; i < layersProp.arraySize; i++)
+                {
+                    string layerName = layersProp.GetArrayElementAtIndex(i).stringValue;
+                    if (!string.IsNullOrEmpty(layerName)) layers.Add($"{i}: {layerName}");
+                }
+
+                string result = $"Existing Tags: {string.Join(", ", tags)}\n\nExisting Layers:\n{string.Join("\n", layers)}";
+                return new ToolResult { success = true, observation = result };
             }
             catch (Exception e)
             {

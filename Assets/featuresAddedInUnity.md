@@ -147,3 +147,13 @@ The agent's "hands" have been specifically tuned for the Unity Editor environmen
 - **Tool Discovery Restoration**: By maintaining a lean context window, the model's attention is consistently returned to the Tool List, resolving the bug where the AI would default to `write_file` for tasks that required specialized tools like Tags or Layers.
 - **Memory Integrity**: The sliding window is "System Aware," meaning it never discards architecturally critical instructions or DNA, ensuring the agent stays "Senior" even in 100+ turn sessions.
 
+---
+
+## 18. Senior Architect Tools: Project-Wide Diagnostics (Phase 17)
+- **Advanced Asset Discovery**: Implemented `project/search_assets`, allowing the agent to use Unity's `AssetDatabase.FindAssets` engine. The AI can now find all instances of a script, prefab, or material across the entire project using powerful queries (e.g., `t:Material`, `l:Player`).
+- **Build & Environment Awareness**: Added `project/inspect_player_settings`, `project/inspect_build_settings`, and `project/list_packages`. The AI now understands its environment, including scripting define symbols, bundle identifiers, scenes in build, and installed packages (URP, ProBuilder, etc.), preventing it from proposing incompatible code.
+- **Scene Hierarchy Mapping**: Implemented `scene/list_all_nodes` and enhanced `scene/inspect_node` with Tag and Layer data. This gives the AI a complete map of the project, reducing navigation errors and improving coordination between scene objects and global settings.
+- **Stable Asset Tracking**: Added `project/get_asset_guid`, enabling the agent to track assets by their unique Unity GUID. This makes the AI's "memory" of project resources resilient to file renames or moves.
+- **Pre-Action Environment Verification**: Added `project/list_tags_and_layers`, enabling the agent to "look before it leaps." This drastically reduces logic errors when managing project-level metadata.
+
+

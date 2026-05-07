@@ -116,6 +116,13 @@ Available Tools:
 11. scene/inspect_node (params: ""path"") - Returns an object's components.
 12. scene/set_component_property (params: ""path"", ""component"", ""property"", ""value"") - Sets a property on a component.
 13. editor/read_console (params: none) - Returns the latest 30 warnings/errors.
+14. project/list_tags_and_layers (params: none) - Returns a list of all Tags and Layers defined in the project. Use this before creating or assigning tags to verify existence.
+15. project/search_assets (params: ""query"") - Uses AssetDatabase.FindAssets to find assets by name, type (e.g. ""t:Prefab""), or label.
+16. project/inspect_player_settings (params: none) - Returns key project settings like Bundle ID, Product Name, and Scripting Define Symbols.
+17. project/list_packages (params: none) - Returns the list of installed packages from manifest.json. Use this to check for URP, ProBuilder, etc.
+18. scene/list_all_nodes (params: none) - Returns a list of all root GameObjects in the active scene.
+19. project/inspect_build_settings (params: none) - Returns the target platform and the list of scenes currently included in the Build Settings.
+20. project/get_asset_guid (params: ""path"") - Returns the unique Unity GUID for an asset path. Use this for stable asset tracking.
 
 Wait for the [Observation] from the system before proceeding.";
 
@@ -612,6 +619,20 @@ Wait for the [Observation] from the system before proceeding.";
                 result = MCPToolRegistry.CreatePrefab(p.path, p.destinationAssetPath);
             else if (toolCall.method == "project/create_tag_or_layer")
                 result = MCPToolRegistry.CreateTagOrLayer(p.type, p.name);
+            else if (toolCall.method == "project/list_tags_and_layers")
+                result = MCPToolRegistry.ListTagsAndLayers();
+            else if (toolCall.method == "project/search_assets")
+                result = MCPToolRegistry.SearchAssets(p.query);
+            else if (toolCall.method == "project/inspect_player_settings")
+                result = MCPToolRegistry.InspectPlayerSettings();
+            else if (toolCall.method == "project/list_packages")
+                result = MCPToolRegistry.ListPackages();
+            else if (toolCall.method == "scene/list_all_nodes")
+                result = MCPToolRegistry.ListAllNodes();
+            else if (toolCall.method == "project/inspect_build_settings")
+                result = MCPToolRegistry.InspectBuildSettings();
+            else if (toolCall.method == "project/get_asset_guid")
+                result = MCPToolRegistry.GetAssetGUID(p.path);
             else
                 result = new MCPToolRegistry.ToolResult { success = false, error = "Unknown tool: " + toolCall.method };
 
@@ -690,6 +711,7 @@ Wait for the [Observation] from the system before proceeding.";
             public string search_block;
             public string replace_block;
             public string destinationAssetPath;
+            public string query;
         }
     }
 }
