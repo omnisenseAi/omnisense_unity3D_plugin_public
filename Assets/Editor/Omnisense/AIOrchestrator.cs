@@ -126,6 +126,31 @@ Available Tools:
 
 Wait for the [Observation] from the system before proceeding.";
 
+        private const string SYSTEM_PROMPT_LITE = @"You are the Omnisense Assistant, a helpful AI developer agent.
+Your goal is to execute commands to help the user. Think step by step using a <thought> block before calling any tool.
+Wait for the [Observation] from the system before proceeding.
+
+You have access to the following MCP tools. To use a tool, output exactly this format:
+```mcp_json
+{
+    ""method"": ""TOOL_NAME"",
+    ""params"": {
+        ""key"": ""value""
+    }
+}
+```
+
+Available Tools:
+1. project/list_directory (params: ""path"") - Lists files.
+2. project/read_file (params: ""path"") - Reads the contents of a text file.
+3. project/write_file (params: ""path"", ""content"") - Creates a NEW file.
+4. project/edit_file (params: ""path"", ""search_block"", ""replace_block"") - Edits existing files. Use exact string matches for search_block.
+5. scene/instantiate_node (params: ""type"", ""name"") - Creates a GameObject.
+6. scene/modify_node (params: ""path"", ""property"", ""value"") - Edits a GameObject.
+7. scene/inspect_node (params: ""path"") - Returns an object's components.
+8. editor/read_console (params: none) - Returns the latest warnings/errors.
+9. scene/list_all_nodes (params: none) - Returns a list of all root GameObjects.";
+
         public void ProcessPrompt(string prompt, string model, string turnId, Action<string, bool> onComplete)
         {
             Debug.Log($"[Omnisense-Diagnostics] --- NEW TURN STARTED: {turnId} ---");
@@ -139,8 +164,9 @@ Wait for the [Observation] from the system before proceeding.";
             
             if (_history.Count == 0)
             {
+                string promptToUse = model == "self-hosted" ? SYSTEM_PROMPT_LITE : SYSTEM_PROMPT;
                 Debug.Log("[Omnisense-Diagnostics] Initializing fresh context with SYSTEM_PROMPT.");
-                _history.Add(new ChatMessage { role = "system", content = SYSTEM_PROMPT });
+                _history.Add(new ChatMessage { role = "system", content = promptToUse });
                 
                 // Load Project DNA if exists
                 try {
@@ -155,10 +181,11 @@ Wait for the [Observation] from the system before proceeding.";
             else
             {
                 // Force-update the SYSTEM_PROMPT to ensure any newly compiled tools are available
+                string promptToUse = model == "self-hosted" ? SYSTEM_PROMPT_LITE : SYSTEM_PROMPT;
                 if (_history[0].role == "system" && !_history[0].content.StartsWith("[PROJECT DNA]"))
                 {
                     Debug.Log("[Omnisense-Diagnostics] Force-updating SYSTEM_PROMPT in existing history to guarantee latest tool definitions.");
-                    _history[0].content = SYSTEM_PROMPT;
+                    _history[0].content = promptToUse;
                 }
             }
             _history.Add(new ChatMessage { role = "user", content = prompt });
@@ -179,7 +206,7 @@ Wait for the [Observation] from the system before proceeding.";
             Debug.Log($"[Omnisense-Diagnostics] History count after prune: {_history.Count}. Retrieving API Key...");
 
             string apiKey = GetApiKey(model);
-            if (string.IsNullOrEmpty(apiKey))
+            if (string.IsNullOrEmpty(apiKey) && model != "self-hosted")
             {
                 Debug.LogError("[Omnisense-Diagnostics] API Key is missing or empty.");
                 onComplete?.Invoke("Error: API Key missing. Please set it in the Settings tab.", true);
@@ -216,6 +243,13 @@ Wait for the [Observation] from the system before proceeding.";
             else if (model.StartsWith("grok"))
             {
                 CallGrok(apiKey, model, (resp, final) => {
+                    if (final) EditorPrefs.SetBool("Omnisense_AI_PendingResume", false);
+                    onComplete?.Invoke(resp, final);
+                });
+            }
+            else if (model == "self-hosted")
+            {
+                CallSelfHosted(apiKey, model, (resp, final) => {
                     if (final) EditorPrefs.SetBool("Omnisense_AI_PendingResume", false);
                     onComplete?.Invoke(resp, final);
                 });
@@ -414,6 +448,134 @@ Wait for the [Observation] from the system before proceeding.";
                 _activeRequest?.Dispose(); _activeRequest = null;
             };
         }
+
+        private void CallSelfHosted(string apiKey, string model, Action<string, bool> onComplete)
+        {
+            if (_isAborted) return;
+            string baseUrl = EditorPrefs.GetString("Omnisense_SelfHosted_URL", "http://localhost:11434/v1");
+            if (string.IsNullOrEmpty(baseUrl)) baseUrl = "http://localhost:11434/v1";
+            
+            // Normalize URL to ensure it ends with /chat/completions
+            string endpoint = baseUrl;
+            if (!endpoint.EndsWith("/chat/completions")) {
+                if (endpoint.EndsWith("/")) endpoint += "chat/completions";
+                else endpoint += "/chat/completions";
+            }
+
+            string targetModel = EditorPrefs.GetString("Omnisense_SelfHosted_Model", "llama3:8b");
+            int maxTokens = EditorPrefs.GetInt("Omnisense_SelfHosted_MaxTokens", 4096);
+            var payloadMessages = new List<ChatMessage>(_history);
+            
+            var requestData = new OpenAIRequest { model = targetModel, messages = payloadMessages, max_completion_tokens = maxTokens };
+            string json = JsonUtility.ToJson(requestData);
+
+            _activeRequest = new UnityWebRequest(endpoint, "POST");
+            _activeRequest.timeout = 120; // Local models can be slow
+            byte[] bodyRaw = Encoding.UTF8.GetBytes(json);
+            _activeRequest.uploadHandler = new UploadHandlerRaw(bodyRaw);
+            _activeRequest.downloadHandler = new DownloadHandlerBuffer();
+            _activeRequest.SetRequestHeader("Content-Type", "application/json");
+            if (!string.IsNullOrEmpty(apiKey))
+            {
+                _activeRequest.SetRequestHeader("Authorization", "Bearer " + apiKey);
+            }
+
+            Debug.Log($"[Omnisense] Sending request to Self-Hosted API ({endpoint}) using model {targetModel}...");
+            var operation = _activeRequest.SendWebRequest();
+            operation.completed += (op) => {
+                if (_isAborted || _activeRequest == null) return;
+                if (_activeRequest.result == UnityWebRequest.Result.Success) {
+                    string responseText = ExtractContent(_activeRequest.downloadHandler.text);
+                    HandleResponse(responseText, model, onComplete);
+                } else {
+                    string errorDetail = "";
+                    try { errorDetail = _activeRequest.downloadHandler?.text ?? ""; } catch { }
+                    onComplete?.Invoke($"Self-Hosted Error: {_activeRequest.error}\n{errorDetail}", true);
+                }
+                _activeRequest?.Dispose(); _activeRequest = null;
+            };
+        }
+
+        public void TestSelfHostedConnection()
+        {
+            string baseUrl = EditorPrefs.GetString("Omnisense_SelfHosted_URL", "http://localhost:11434/v1");
+            string apiKey = EditorPrefs.GetString("Omnisense_SelfHosted_Key", "");
+            string targetModel = EditorPrefs.GetString("Omnisense_SelfHosted_Model", "llama3:8b");
+            
+            string endpoint = baseUrl;
+            if (!endpoint.EndsWith("/chat/completions")) {
+                endpoint += endpoint.EndsWith("/") ? "chat/completions" : "/chat/completions";
+            }
+
+            var requestData = new OpenAIRequest { 
+                model = targetModel, 
+                messages = new List<ChatMessage> { new ChatMessage { role = "user", content = "Ping." } },
+                max_completion_tokens = 5
+            };
+            
+            var req = new UnityWebRequest(endpoint, "POST");
+            byte[] bodyRaw = Encoding.UTF8.GetBytes(JsonUtility.ToJson(requestData));
+            req.uploadHandler = new UploadHandlerRaw(bodyRaw);
+            req.downloadHandler = new DownloadHandlerBuffer();
+            req.SetRequestHeader("Content-Type", "application/json");
+            if (!string.IsNullOrEmpty(apiKey)) req.SetRequestHeader("Authorization", "Bearer " + apiKey);
+
+            Debug.Log($"[Omnisense] Testing Self-Hosted connection at {endpoint}...");
+            req.SendWebRequest().completed += (op) => {
+                if (req.result == UnityWebRequest.Result.Success) {
+                    Debug.Log("[Omnisense] Self-Hosted connection SUCCESS!");
+                    EditorUtility.DisplayDialog("Connection Test", "Successfully connected to the local runner and model!", "OK");
+                } else {
+                    Debug.LogError($"[Omnisense] Self-Hosted connection failed: {req.error}");
+                    EditorUtility.DisplayDialog("Connection Test Failed", $"Failed to connect to local runner.\n\nError: {req.error}\n\nPlease check your URL and make sure the server is running.", "OK");
+                }
+                req.Dispose();
+            };
+        }
+
+        public void FetchSelfHostedModels()
+        {
+            string baseUrl = EditorPrefs.GetString("Omnisense_SelfHosted_URL", "http://localhost:11434/v1");
+            string apiKey = EditorPrefs.GetString("Omnisense_SelfHosted_Key", "");
+            
+            string endpoint = baseUrl;
+            if (endpoint.EndsWith("/chat/completions")) endpoint = endpoint.Substring(0, endpoint.Length - 17);
+            if (!endpoint.EndsWith("/models")) {
+                endpoint += endpoint.EndsWith("/") ? "models" : "/models";
+            }
+
+            var req = UnityWebRequest.Get(endpoint);
+            if (!string.IsNullOrEmpty(apiKey)) req.SetRequestHeader("Authorization", "Bearer " + apiKey);
+
+            Debug.Log($"[Omnisense] Fetching models from {endpoint}...");
+            req.SendWebRequest().completed += (op) => {
+                if (req.result == UnityWebRequest.Result.Success) {
+                    try {
+                        var json = req.downloadHandler.text;
+                        var modelsData = JsonUtility.FromJson<ModelsResponse>(json);
+                        if (modelsData != null && modelsData.data != null && modelsData.data.Count > 0) {
+                            string modelList = "";
+                            foreach(var m in modelsData.data) modelList += $"- {m.id}\n";
+                            EditorUtility.DisplayDialog("Available Models", $"Found {modelsData.data.Count} models:\n\n{modelList}", "OK");
+                        } else {
+                            EditorUtility.DisplayDialog("Available Models", "Request succeeded, but couldn't parse the model list automatically. Check the console for the raw JSON.", "OK");
+                            Debug.Log($"[Omnisense] Raw models response: {json}");
+                        }
+                    } catch {
+                        EditorUtility.DisplayDialog("Available Models", "Failed to parse models. Check console for raw output.", "OK");
+                        Debug.Log($"[Omnisense] Raw models response: {req.downloadHandler.text}");
+                    }
+                } else {
+                    EditorUtility.DisplayDialog("Fetch Failed", $"Failed to fetch models.\n\nError: {req.error}", "OK");
+                }
+                req.Dispose();
+            };
+        }
+
+        [Serializable]
+        private class ModelsResponse { public List<ModelData> data; }
+        [Serializable]
+        private class ModelData { public string id; }
 
         public event Action<string, Action<bool>> OnPendingAction;
 

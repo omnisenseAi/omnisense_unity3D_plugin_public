@@ -212,6 +212,18 @@ namespace Omnisense
             root.Q<TextField>("anthropic-key").RegisterValueChangedCallback(_ => SaveSettings());
             root.Q<TextField>("gemini-key").RegisterValueChangedCallback(_ => SaveSettings());
             root.Q<TextField>("grok-key").RegisterValueChangedCallback(_ => SaveSettings());
+            root.Q<TextField>("selfhosted-url")?.RegisterValueChangedCallback(_ => SaveSettings());
+            root.Q<TextField>("selfhosted-model")?.RegisterValueChangedCallback(_ => SaveSettings());
+            root.Q<TextField>("selfhosted-key")?.RegisterValueChangedCallback(_ => SaveSettings());
+            
+            var btnTestSelfHosted = root.Q<Button>("btn-test-selfhosted");
+            if (btnTestSelfHosted != null) {
+                btnTestSelfHosted.clicked += () => AIOrchestrator.Instance.TestSelfHostedConnection();
+            }
+            var btnFetchModels = root.Q<Button>("btn-fetch-models");
+            if (btnFetchModels != null) {
+                btnFetchModels.clicked += () => AIOrchestrator.Instance.FetchSelfHostedModels();
+            }
 
             // Initialize Session
             string lastSessionId = EditorPrefs.GetString("Omnisense_LastSessionId", "");
@@ -234,7 +246,8 @@ namespace Omnisense
                     "gpt-5.5", "gpt-5.4-mini", "o3-mini",
                     "claude-4.7-opus", "claude-4.6-sonnet", "claude-4.5-haiku",
                     "gemini-3.1-pro", "gemini-3.1-flash", "gemini-3.1-flash-lite",
-                    "grok-4.3-beta", "grok-4.20-beta-2", "grok-4.20-fast"
+                    "grok-4.3-beta", "grok-4.20-beta-2", "grok-4.20-fast",
+                    "self-hosted"
                 };
                 
                 string savedModel = EditorPrefs.GetString("Omnisense_SelectedModel", "gpt-5.5");
@@ -414,10 +427,19 @@ namespace Omnisense
             EditorPrefs.SetString("Omnisense_Gemini_Key", rootVisualElement.Q<TextField>("gemini-key").value);
             EditorPrefs.SetString("Omnisense_Grok_Key", rootVisualElement.Q<TextField>("grok-key").value);
             
+            var shUrl = rootVisualElement.Q<TextField>("selfhosted-url");
+            if (shUrl != null) EditorPrefs.SetString("Omnisense_SelfHosted_URL", shUrl.value);
+            var shModel = rootVisualElement.Q<TextField>("selfhosted-model");
+            if (shModel != null) EditorPrefs.SetString("Omnisense_SelfHosted_Model", shModel.value);
+            var shKey = rootVisualElement.Q<TextField>("selfhosted-key");
+            if (shKey != null) EditorPrefs.SetString("Omnisense_SelfHosted_Key", shKey.value);
+            
             EditorPrefs.SetInt("Omnisense_OpenAI_MaxTokens", rootVisualElement.Q<SliderInt>("openai-max-tokens-slider").value);
             EditorPrefs.SetInt("Omnisense_Anthropic_MaxTokens", rootVisualElement.Q<SliderInt>("anthropic-max-tokens-slider").value);
             EditorPrefs.SetInt("Omnisense_Gemini_MaxTokens", rootVisualElement.Q<SliderInt>("gemini-max-tokens-slider").value);
             EditorPrefs.SetInt("Omnisense_Grok_MaxTokens", rootVisualElement.Q<SliderInt>("grok-max-tokens-slider").value);
+            var shSlider = rootVisualElement.Q<SliderInt>("selfhosted-max-tokens-slider");
+            if (shSlider != null) EditorPrefs.SetInt("Omnisense_SelfHosted_MaxTokens", shSlider.value);
 
             Debug.Log("[Omnisense] Settings saved.");
         }
@@ -429,10 +451,20 @@ namespace Omnisense
             rootVisualElement.Q<TextField>("gemini-key").value = EditorPrefs.GetString("Omnisense_Gemini_Key", "");
             rootVisualElement.Q<TextField>("grok-key").value = EditorPrefs.GetString("Omnisense_Grok_Key", "");
 
+            var shUrl = rootVisualElement.Q<TextField>("selfhosted-url");
+            if (shUrl != null) shUrl.value = EditorPrefs.GetString("Omnisense_SelfHosted_URL", "http://localhost:11434/v1");
+            var shModel = rootVisualElement.Q<TextField>("selfhosted-model");
+            if (shModel != null) shModel.value = EditorPrefs.GetString("Omnisense_SelfHosted_Model", "llama3:8b");
+            var shKey = rootVisualElement.Q<TextField>("selfhosted-key");
+            if (shKey != null) shKey.value = EditorPrefs.GetString("Omnisense_SelfHosted_Key", "");
+
             BindTokenControls("openai", 4096, 1, 16384);
             BindTokenControls("anthropic", 4096, 1, 8192);
             BindTokenControls("gemini", 4096, 1, 8192);
             BindTokenControls("grok", 4096, 1, 8192);
+            
+            var shSlider = rootVisualElement.Q<SliderInt>("selfhosted-max-tokens-slider");
+            if (shSlider != null) BindTokenControls("selfhosted", 4096, 1, 8192);
         }
 
         private void BindTokenControls(string prefix, int defaultVal, int min, int max)

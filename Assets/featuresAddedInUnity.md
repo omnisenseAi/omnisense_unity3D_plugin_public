@@ -155,5 +155,17 @@ The agent's "hands" have been specifically tuned for the Unity Editor environmen
 - **Scene Hierarchy Mapping**: Implemented `scene/list_all_nodes` and enhanced `scene/inspect_node` with Tag and Layer data. This gives the AI a complete map of the project, reducing navigation errors and improving coordination between scene objects and global settings.
 - **Stable Asset Tracking**: Added `project/get_asset_guid`, enabling the agent to track assets by their unique Unity GUID. This makes the AI's "memory" of project resources resilient to file renames or moves.
 - **Pre-Action Environment Verification**: Added `project/list_tags_and_layers`, enabling the agent to "look before it leaps." This drastically reduces logic errors when managing project-level metadata.
+---
 
+## 19. Senior Architect Reliability: Loop Prevention & Transparency (Phase 18)
+- **Elimination of the "Phantom Loop"**: Removed aggressive, hardcoded format reminders from the orchestrator that were coercing the LLM into repetitive tool calls. The agent now respects the "End of Turn" and provides plain-text answers when a task is complete.
+- **UI State Transparency**: Implemented status updates like `[System]: Tool executed. Analyzing results...` during hidden reflection turns. This eliminates the "Ghost Loop" perception where the agent appeared to be hung while it was actually performing critical internal audits.
+- **Dynamic System Prompt Injection**: The orchestrator now force-updates the `SYSTEM_PROMPT` in the existing history at the start of every new turn. This ensures that any tool definition updates (made during live development) are immediately recognized by the agent without requiring a history clear.
 
+---
+
+## 20. Self-Hosted / BYOK: Private LLM Integration (Phase 19)
+- **OpenAI-Compatible Bridge**: Implemented a dedicated `CallSelfHosted` pipeline. Users can now connect Omnisense to any OpenAI-compatible local runner (Ollama, LM Studio, vLLM, LocalAI) by specifying a custom Base URL.
+- **Diagnostic Toolset**: Added **"Test Connection"** and **"Fetch Models"** functionality directly into the settings tab. Users can verify server reachability and browse available local models via native Unity dialog popups.
+- **System Prompt "Lite"**: Introduced a specialized, lightweight version of the system prompt for local inference. When using `self-hosted` models, the orchestrator automatically strips complex tool schemas to reduce context pressure, significantly improving the reasoning reliability of smaller 7B and 8B parameter models.
+- **Persistence & Security**: Self-hosted credentials (URLs, Models, and optional Auth Tokens) are securely stored via `EditorPrefs`, ensuring project-specific details are never accidentally committed to version control.

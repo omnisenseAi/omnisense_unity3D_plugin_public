@@ -97,7 +97,26 @@
                     </ui:VisualElement>
 
                     <ui:VisualElement name="selfhosted-settings" class="settings-group hidden">
-                        <ui:Label text="Self-hosted settings coming soon..." class="placeholder-text" />
+                        <ui:Label text="Local Server Base URL (e.g., http://localhost:11434/v1):" class="field-label" />
+                        <ui:TextField name="selfhosted-url" value="http://localhost:11434/v1" class="field-input" />
+                        
+                        <ui:Label text="Model Name (e.g., llama3:8b or local-model):" class="field-label" />
+                        <ui:VisualElement style="flex-direction: row; align-items: center; margin-bottom: 10px;">
+                            <ui:TextField name="selfhosted-model" class="field-input" style="flex-grow: 1; margin-bottom: 0;" />
+                            <ui:Button name="btn-fetch-models" text="Fetch Models" class="toolbar-btn" style="margin-left: 5px;" />
+                        </ui:VisualElement>
+
+                        <ui:Label text="API Key / Auth Token (Optional):" class="field-label" />
+                        <ui:TextField name="selfhosted-key" password="true" class="field-input" />
+
+                        <ui:Label text="Max Output Tokens (1 - 8192):" class="field-label" />
+                        <ui:VisualElement class="slider-row">
+                            <ui:SliderInt name="selfhosted-max-tokens-slider" low-value="1" high-value="8192" class="token-slider" />
+                            <ui:IntegerField name="selfhosted-max-tokens-field" class="token-field" />
+                        </ui:VisualElement>
+                        
+                        <ui:Button name="btn-test-selfhosted" text="Test Connection" class="toolbar-btn" style="margin-top: 10px; align-self: flex-start;" />
+                        <ui:Label name="selfhosted-status" text="Status: Untested" class="field-label" style="margin-top: 5px; color: #aaa;" />
                     </ui:VisualElement>
                 </ui:ScrollView>
 
