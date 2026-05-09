@@ -289,38 +289,38 @@ Available Tools:
             string json = JsonUtility.ToJson(requestData);
 
             _activeRequest = new UnityWebRequest("https://api.openai.com/v1/chat/completions", "POST");
-            _activeRequest.timeout = 60; // 60 second timeout
+            UnityWebRequest req = _activeRequest;
+            req.timeout = 60; // 60 second timeout
             byte[] bodyRaw = Encoding.UTF8.GetBytes(json);
-            _activeRequest.uploadHandler = new UploadHandlerRaw(bodyRaw);
-            _activeRequest.downloadHandler = new DownloadHandlerBuffer();
-            _activeRequest.SetRequestHeader("Content-Type", "application/json");
-            _activeRequest.SetRequestHeader("Authorization", "Bearer " + apiKey);
+            req.uploadHandler = new UploadHandlerRaw(bodyRaw);
+            req.downloadHandler = new DownloadHandlerBuffer();
+            req.SetRequestHeader("Content-Type", "application/json");
+            req.SetRequestHeader("Authorization", "Bearer " + apiKey);
 
             Debug.Log($"[Omnisense] Sending request to OpenAI API using model {model} ({payloadMessages.Count} messages in history)...");
-            var operation = _activeRequest.SendWebRequest();
+            var operation = req.SendWebRequest();
             operation.completed += (op) =>
             {
-                if (_activeRequest == null) return;
-                
-                if (_activeRequest.result == UnityWebRequest.Result.Success)
+                if (req.result == UnityWebRequest.Result.Success)
                 {
                     Debug.Log("[Omnisense] Received successful response from API.");
-                    string responseText = ExtractContent(_activeRequest.downloadHandler.text);
+                    string responseText = ExtractContent(req.downloadHandler.text);
                     HandleResponse(responseText, model, onComplete);
                 }
-                else if (_activeRequest.result == UnityWebRequest.Result.ConnectionError || _activeRequest.result == UnityWebRequest.Result.ProtocolError)
+                else if (req.result == UnityWebRequest.Result.ConnectionError || req.result == UnityWebRequest.Result.ProtocolError)
                 {
                     string errorDetail = "";
-                    try { errorDetail = _activeRequest.downloadHandler?.text ?? ""; } catch { }
-                    Debug.LogError($"[Omnisense] API Error: {_activeRequest.error}\n{errorDetail}");
-                    onComplete?.Invoke($"[System Error]: API Request failed ({_activeRequest.result}).\nDetails: {_activeRequest.error}\n{errorDetail}", true);
+                    try { errorDetail = req.downloadHandler?.text ?? ""; } catch { }
+                    Debug.LogError($"[Omnisense] API Error: {req.error}\n{errorDetail}");
+                    onComplete?.Invoke($"[System Error]: API Request failed ({req.result}).\nDetails: {req.error}\n{errorDetail}", true);
                 }
-                else 
+                else if (!_isAborted)
                 {
-                    onComplete?.Invoke($"[System Error]: Unexpected API failure ({_activeRequest.result}).", true);
+                    onComplete?.Invoke($"[System Error]: Unexpected API failure ({req.result}).", true);
                 }
-                _activeRequest.Dispose();
-                _activeRequest = null;
+                
+                req.Dispose();
+                if (_activeRequest == req) _activeRequest = null;
             };
         }
 
@@ -343,32 +343,34 @@ Available Tools:
             json = "{\"model\":\"" + model + "\",\"max_tokens\":" + maxTokens + ",\"messages\":" + messagesJson + "}";
 
             _activeRequest = new UnityWebRequest("https://api.anthropic.com/v1/messages", "POST");
-            _activeRequest.timeout = 60;
+            UnityWebRequest req = _activeRequest;
+            req.timeout = 60;
             byte[] bodyRaw = Encoding.UTF8.GetBytes(json);
-            _activeRequest.uploadHandler = new UploadHandlerRaw(bodyRaw);
-            _activeRequest.downloadHandler = new DownloadHandlerBuffer();
-            _activeRequest.SetRequestHeader("Content-Type", "application/json");
-            _activeRequest.SetRequestHeader("x-api-key", apiKey);
-            _activeRequest.SetRequestHeader("anthropic-version", "2023-06-01");
+            req.uploadHandler = new UploadHandlerRaw(bodyRaw);
+            req.downloadHandler = new DownloadHandlerBuffer();
+            req.SetRequestHeader("Content-Type", "application/json");
+            req.SetRequestHeader("x-api-key", apiKey);
+            req.SetRequestHeader("anthropic-version", "2023-06-01");
 
             Debug.Log($"[Omnisense] Sending request to Anthropic API using model {model} ({payloadMessages.Count} messages in history)...");
-            var operation = _activeRequest.SendWebRequest();
+            var operation = req.SendWebRequest();
             operation.completed += (op) => {
-                if (_isAborted || _activeRequest == null) return;
-                if (_activeRequest.result == UnityWebRequest.Result.Success) {
+                if (req.result == UnityWebRequest.Result.Success) {
                     // Anthropic response is different
-                    string resp = _activeRequest.downloadHandler.text;
+                    string resp = req.downloadHandler.text;
                     // Simple extraction for now
                     var match = Regex.Match(resp, "\"text\":\"(.*?)\"", RegexOptions.Singleline);
                     HandleResponse(match.Success ? match.Groups[1].Value.Replace("\\n", "\n").Replace("\\\"", "\"") : resp, model, onComplete);
-                } else if (_activeRequest.result == UnityWebRequest.Result.ConnectionError || _activeRequest.result == UnityWebRequest.Result.ProtocolError) {
+                } else if (req.result == UnityWebRequest.Result.ConnectionError || req.result == UnityWebRequest.Result.ProtocolError) {
                     string errorDetail = "";
-                    try { errorDetail = _activeRequest.downloadHandler?.text ?? ""; } catch { }
-                    onComplete?.Invoke($"Anthropic Error: {_activeRequest.error}\n{errorDetail}", true);
-                } else {
-                    onComplete?.Invoke($"Anthropic Error: Unexpected failure ({_activeRequest.result})", true);
+                    try { errorDetail = req.downloadHandler?.text ?? ""; } catch { }
+                    onComplete?.Invoke($"Anthropic Error: {req.error}\n{errorDetail}", true);
+                } else if (!_isAborted) {
+                    onComplete?.Invoke($"Anthropic Error: Unexpected failure ({req.result})", true);
                 }
-                _activeRequest?.Dispose(); _activeRequest = null;
+                
+                req.Dispose();
+                if (_activeRequest == req) _activeRequest = null;
             };
         }
 
@@ -390,28 +392,30 @@ Available Tools:
 
             string url = $"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={apiKey}";
             _activeRequest = new UnityWebRequest(url, "POST");
-            _activeRequest.timeout = 60;
+            UnityWebRequest req = _activeRequest;
+            req.timeout = 60;
             byte[] bodyRaw = Encoding.UTF8.GetBytes(json);
-            _activeRequest.uploadHandler = new UploadHandlerRaw(bodyRaw);
-            _activeRequest.downloadHandler = new DownloadHandlerBuffer();
-            _activeRequest.SetRequestHeader("Content-Type", "application/json");
+            req.uploadHandler = new UploadHandlerRaw(bodyRaw);
+            req.downloadHandler = new DownloadHandlerBuffer();
+            req.SetRequestHeader("Content-Type", "application/json");
 
             Debug.Log($"[Omnisense] Sending request to Gemini API using model {model} ({_history.Count} messages in history)...");
-            var operation = _activeRequest.SendWebRequest();
+            var operation = req.SendWebRequest();
             operation.completed += (op) => {
-                if (_isAborted || _activeRequest == null) return;
-                if (_activeRequest.result == UnityWebRequest.Result.Success) {
-                    string resp = _activeRequest.downloadHandler.text;
+                if (req.result == UnityWebRequest.Result.Success) {
+                    string resp = req.downloadHandler.text;
                     var match = Regex.Match(resp, "\"text\":\\s*\"(.*?)\"", RegexOptions.Singleline);
                     HandleResponse(match.Success ? match.Groups[1].Value.Replace("\\n", "\n").Replace("\\\"", "\"") : resp, model, onComplete);
-                } else if (_activeRequest.result == UnityWebRequest.Result.ConnectionError || _activeRequest.result == UnityWebRequest.Result.ProtocolError) {
+                } else if (req.result == UnityWebRequest.Result.ConnectionError || req.result == UnityWebRequest.Result.ProtocolError) {
                     string errorDetail = "";
-                    try { errorDetail = _activeRequest.downloadHandler?.text ?? ""; } catch { }
-                    onComplete?.Invoke($"Gemini Error: {_activeRequest.error}\n{errorDetail}", true);
-                } else {
-                    onComplete?.Invoke($"Gemini Error: Unexpected failure ({_activeRequest.result})", true);
+                    try { errorDetail = req.downloadHandler?.text ?? ""; } catch { }
+                    onComplete?.Invoke($"Gemini Error: {req.error}\n{errorDetail}", true);
+                } else if (!_isAborted) {
+                    onComplete?.Invoke($"Gemini Error: Unexpected failure ({req.result})", true);
                 }
-                _activeRequest?.Dispose(); _activeRequest = null;
+                
+                req.Dispose();
+                if (_activeRequest == req) _activeRequest = null;
             };
         }
 
@@ -424,28 +428,30 @@ Available Tools:
             string json = JsonUtility.ToJson(requestData);
 
             _activeRequest = new UnityWebRequest("https://api.x.ai/v1/chat/completions", "POST");
-            _activeRequest.timeout = 60;
+            UnityWebRequest req = _activeRequest;
+            req.timeout = 60;
             byte[] bodyRaw = Encoding.UTF8.GetBytes(json);
-            _activeRequest.uploadHandler = new UploadHandlerRaw(bodyRaw);
-            _activeRequest.downloadHandler = new DownloadHandlerBuffer();
-            _activeRequest.SetRequestHeader("Content-Type", "application/json");
-            _activeRequest.SetRequestHeader("Authorization", "Bearer " + apiKey);
+            req.uploadHandler = new UploadHandlerRaw(bodyRaw);
+            req.downloadHandler = new DownloadHandlerBuffer();
+            req.SetRequestHeader("Content-Type", "application/json");
+            req.SetRequestHeader("Authorization", "Bearer " + apiKey);
 
             Debug.Log($"[Omnisense] Sending request to Grok API using model {model} ({payloadMessages.Count} messages in history)...");
-            var operation = _activeRequest.SendWebRequest();
+            var operation = req.SendWebRequest();
             operation.completed += (op) => {
-                if (_isAborted || _activeRequest == null) return;
-                if (_activeRequest.result == UnityWebRequest.Result.Success) {
-                    string responseText = ExtractContent(_activeRequest.downloadHandler.text);
+                if (req.result == UnityWebRequest.Result.Success) {
+                    string responseText = ExtractContent(req.downloadHandler.text);
                     HandleResponse(responseText, model, onComplete);
-                } else if (_activeRequest.result == UnityWebRequest.Result.ConnectionError || _activeRequest.result == UnityWebRequest.Result.ProtocolError) {
+                } else if (req.result == UnityWebRequest.Result.ConnectionError || req.result == UnityWebRequest.Result.ProtocolError) {
                     string errorDetail = "";
-                    try { errorDetail = _activeRequest.downloadHandler?.text ?? ""; } catch { }
-                    onComplete?.Invoke($"Grok Error: {_activeRequest.error}\n{errorDetail}", true);
-                } else {
-                    onComplete?.Invoke($"Grok Error: Unexpected failure ({_activeRequest.result})", true);
+                    try { errorDetail = req.downloadHandler?.text ?? ""; } catch { }
+                    onComplete?.Invoke($"Grok Error: {req.error}\n{errorDetail}", true);
+                } else if (!_isAborted) {
+                    onComplete?.Invoke($"Grok Error: Unexpected failure ({req.result})", true);
                 }
-                _activeRequest?.Dispose(); _activeRequest = null;
+                
+                req.Dispose();
+                if (_activeRequest == req) _activeRequest = null;
             };
         }
 

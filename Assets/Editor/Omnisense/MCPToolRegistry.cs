@@ -420,10 +420,23 @@ namespace Omnisense
                 SerializedObject so = new SerializedObject(comp);
                 SerializedProperty prop = so.FindProperty(property);
                 
+                // Unity backing fields often start with m_
+                if (prop == null && !property.StartsWith("m_"))
+                {
+                    prop = so.FindProperty("m_" + char.ToUpper(property[0]) + property.Substring(1));
+                    if (prop == null) prop = so.FindProperty("m_" + property);
+                }
+                
                 if (prop == null) return new ToolResult { success = false, error = $"Property '{property}' not found on component '{componentName}'." };
 
                 switch (prop.propertyType)
                 {
+                    case SerializedPropertyType.Enum:
+                        int enumIndex = Array.FindIndex(prop.enumNames, name => name.Equals(value, StringComparison.OrdinalIgnoreCase));
+                        if (enumIndex >= 0) prop.enumValueIndex = enumIndex;
+                        else if (int.TryParse(value, out int intVal)) prop.enumValueIndex = intVal;
+                        else return new ToolResult { success = false, error = $"Invalid enum value '{value}'. Valid options: {string.Join(", ", prop.enumNames)}" };
+                        break;
                     case SerializedPropertyType.Integer: prop.intValue = int.Parse(value); break;
                     case SerializedPropertyType.Float: prop.floatValue = float.Parse(value); break;
                     case SerializedPropertyType.Boolean: prop.boolValue = bool.Parse(value); break;
