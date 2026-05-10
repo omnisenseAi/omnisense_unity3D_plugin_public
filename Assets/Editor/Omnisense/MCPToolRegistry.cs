@@ -416,90 +416,14 @@ namespace Omnisense
                     if (comp == null) return new ToolResult { success = false, error = $"Component '{componentName}' not found on {path}" };
                 }
 
-                Undo.RecordObject(comp, "Modify Property via Omnisense");
-                SerializedObject so = new SerializedObject(comp);
-                SerializedProperty prop = so.FindProperty(property);
-                
-                // Unity backing fields often start with m_
-                if (prop == null && !property.StartsWith("m_"))
+                if (UnityComponentHelper.SetProperty(comp, property, value, out string errorMsg))
                 {
-                    prop = so.FindProperty("m_" + char.ToUpper(property[0]) + property.Substring(1));
-                    if (prop == null) prop = so.FindProperty("m_" + property);
+                    return new ToolResult { success = true, observation = $"Successfully set {property} = {value} on {componentName} ({path})" };
                 }
-                
-                if (prop == null) return new ToolResult { success = false, error = $"Property '{property}' not found on component '{componentName}'." };
-
-                switch (prop.propertyType)
+                else
                 {
-                    case SerializedPropertyType.Enum:
-                        int enumIndex = Array.FindIndex(prop.enumNames, name => name.Equals(value, StringComparison.OrdinalIgnoreCase));
-                        if (enumIndex >= 0) prop.enumValueIndex = enumIndex;
-                        else if (int.TryParse(value, out int intVal)) prop.enumValueIndex = intVal;
-                        else return new ToolResult { success = false, error = $"Invalid enum value '{value}'. Valid options: {string.Join(", ", prop.enumNames)}" };
-                        break;
-                    case SerializedPropertyType.Integer: prop.intValue = int.Parse(value); break;
-                    case SerializedPropertyType.Float: prop.floatValue = float.Parse(value); break;
-                    case SerializedPropertyType.Boolean: prop.boolValue = bool.Parse(value); break;
-                    case SerializedPropertyType.String: prop.stringValue = value; break;
-                    case SerializedPropertyType.Vector2:
-                        string[] v2 = value.Split(',');
-                        prop.vector2Value = new Vector2(float.Parse(v2[0]), float.Parse(v2[1]));
-                        break;
-                    case SerializedPropertyType.Vector3:
-                        string[] v3 = value.Split(',');
-                        prop.vector3Value = new Vector3(float.Parse(v3[0]), float.Parse(v3[1]), float.Parse(v3[2]));
-                        break;
-                    case SerializedPropertyType.ObjectReference:
-                        // Attempt to find object in scene
-                        string targetPath = value.StartsWith("/") ? value.Substring(1) : value;
-                        GameObject targetObj = GameObject.Find(targetPath);
-                        UnityEngine.Object finalTarget = null;
-
-                        if (targetObj != null) 
-                        {
-                            finalTarget = targetObj;
-                        } 
-                        else 
-                        {
-                            // Try exact project path
-                            finalTarget = AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(value);
-                            if (finalTarget == null)
-                            {
-                                // Smart search project assets by name
-                                string[] guids = AssetDatabase.FindAssets(value);
-                                if (guids.Length > 0) {
-                                    finalTarget = AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(AssetDatabase.GUIDToAssetPath(guids[0]));
-                                }
-                            }
-                        }
-
-                        if (finalTarget != null) 
-                        {
-                            if (finalTarget is GameObject go)
-                            {
-                                if (prop.type.Contains("GameObject")) prop.objectReferenceValue = go;
-                                else if (prop.type.Contains("Transform")) prop.objectReferenceValue = go.transform;
-                                else {
-                                    string typeName = prop.type.Replace("PPtr<$", "").Replace(">", "");
-                                    prop.objectReferenceValue = go.GetComponent(typeName);
-                                }
-                            }
-                            else 
-                            {
-                                prop.objectReferenceValue = finalTarget;
-                            }
-                        } 
-                        else 
-                        {
-                            return new ToolResult { success = false, error = $"Target object/asset not found for value: {value}" };
-                        }
-                        break;
-                    default:
-                        return new ToolResult { success = false, error = $"Property type {prop.propertyType} is not supported for remote editing." };
+                    return new ToolResult { success = false, error = errorMsg };
                 }
-
-                so.ApplyModifiedProperties();
-                return new ToolResult { success = true, observation = $"Successfully set {property} = {value} on {componentName} ({path})" };
             }
             catch (Exception e)
             {
@@ -617,6 +541,50 @@ namespace Omnisense
                     success = true, 
                     observation = resultStr 
                 };
+            }
+            catch (Exception e)
+            {
+                return new ToolResult { success = false, error = e.Message };
+            }
+        }
+
+        public static ToolResult InspectComponent(string path, string componentName)
+        {
+            Debug.Log($"[Omnisense] Tool: InspectComponent(path='{path}', component='{componentName}')");
+            try
+            {
+                string searchPath = path.StartsWith("/") ? path.Substring(1) : path;
+                GameObject obj = GameObject.Find(searchPath);
+                
+                if (obj == null) return new ToolResult { success = false, error = $"Object not found: {searchPath}" };
+
+                Component comp = obj.GetComponent(componentName);
+                if (comp == null) 
+                {
+                    Component[] allComps = obj.GetComponents<Component>();
+                    comp = Array.Find(allComps, c => c != null && c.GetType().Name.Equals(componentName, StringComparison.OrdinalIgnoreCase));
+                    if (comp == null) return new ToolResult { success = false, error = $"Component '{componentName}' not found on {path}" };
+                }
+
+                System.Text.StringBuilder sb = new System.Text.StringBuilder();
+                sb.AppendLine($"--- {componentName} Properties ---");
+                
+                var properties = comp.GetType().GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                foreach (var p in properties)
+                {
+                    if (p.CanRead && p.CanWrite)
+                    {
+                        try { sb.AppendLine($"{p.Name} ({p.PropertyType.Name}): {p.GetValue(comp)}"); } catch { }
+                    }
+                }
+
+                var fields = comp.GetType().GetFields(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                foreach (var f in fields)
+                {
+                    try { sb.AppendLine($"{f.Name} ({f.FieldType.Name}): {f.GetValue(comp)}"); } catch { }
+                }
+
+                return new ToolResult { success = true, observation = sb.ToString() };
             }
             catch (Exception e)
             {

@@ -169,3 +169,28 @@ The agent's "hands" have been specifically tuned for the Unity Editor environmen
 - **Diagnostic Toolset**: Added **"Test Connection"** and **"Fetch Models"** functionality directly into the settings tab. Users can verify server reachability and browse available local models via native Unity dialog popups.
 - **System Prompt "Lite"**: Introduced a specialized, lightweight version of the system prompt for local inference. When using `self-hosted` models, the orchestrator automatically strips complex tool schemas to reduce context pressure, significantly improving the reasoning reliability of smaller 7B and 8B parameter models.
 - **Persistence & Security**: Self-hosted credentials (URLs, Models, and optional Auth Tokens) are securely stored via `EditorPrefs`, ensuring project-specific details are never accidentally committed to version control.
+
+---
+
+## 21. SOTA Error Handling & Loop Prevention (Phase 20)
+- **Honest Tool Observations**: Implemented a native Unity engine error interceptor. The tool registry now hooks into `Application.logMessageReceived` during execution. If Unity throws an internal error (e.g., "Tag 'enemy' is not defined"), the agent now receives that **exact** error string instead of a false "Success" result.
+- **Deterministic Loop Detection**: Added a rolling `_actionHistory` hash that tracks the last 3 tool signatures. If the agent attempts the exact same action 3 times consecutively, the orchestrator kills the loop and injects a warning: *"Loop detected! Change your strategy or ask the user for help."*
+- **Absolute Circuit Breaker**: Enforced a hard `MAX_STEPS = 10` limit per user prompt. This prevents the agent from exhausting API tokens or hanging the Unity editor in an infinite reasoning spiral.
+
+---
+
+## 22. High-Reliability Network Layer (Phase 21)
+- **API Race Condition Fix**: Refactored the `UnityWebRequest` disposal logic. API connectors now capture their own request instances in a local closure, preventing the completion callback of Turn N from accidentally disposing of the request for Turn N+1 during the ReAct loop.
+- **Silent Hang Prevention**: Updated all provider connectors (OpenAI, Anthropic, Gemini, Grok) with explicit `ConnectionError` and `ProtocolError` handling. This ensures that if the API rejects a request (e.g., token limit reached), the UI is guaranteed to unlock and display a truthful diagnostic message.
+- **Context Garbage Collection**: Implemented `PruneHistory()`, an automated memory management system that truncates old `[Observation]` blocks (like 1000-line script reads) once they are older than 10 turns, preventing "Context Bloat" and 400 Bad Request errors.
+
+---
+
+## 23. Dedicated Engine Helpers & Reflection Fallback (Phase 22)
+- **Separation of Concerns**: Migrated all component manipulation logic into a dedicated **`UnityComponentHelper`** class. This decouples the agent's "thinking" (AIOrchestrator) from its "hands" (Unity manipulation).
+- **Automated Backing Field Resolution**: The system now automatically handles Unity's internal serialization quirks. If a property like `gravityScale` isn't found, the helper automatically resolves the internal `m_GravityScale` backing field.
+- **C# Reflection Fallback**: If Unity's `SerializedObject` system fails to expose a property (common in physics components like `Rigidbody2D`), the helper automatically cascades to a **Reflection-based engine**. It dynamically scans the component for C# properties/fields and applies changes directly, making the agent's actions significantly more robust across different Unity versions.
+- **Case-Insensitive Enum Support**: Enhanced property setting to support Enums (e.g., `RigidbodyType2D`). The helper intelligently maps the agent's string input (e.g., `"Kinematic"`) to the correct enum index.
+- **Introspective Scene Discovery**: Added **`scene/inspect_component`**. This tool solves the "Agent Blindness" problem where the AI could see a component (like `Rigidbody2D`) but didn't know which of its internal fields were available for editing. The tool uses Reflection to dump a component's entire public state (properties and fields), enabling the AI to autonomously discover and modify deep engine properties that aren't exposed by standard scene-level inspection.
+
+

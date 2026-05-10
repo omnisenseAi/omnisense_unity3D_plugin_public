@@ -123,6 +123,7 @@ Available Tools:
 18. scene/list_all_nodes (params: none) - Returns a list of all root GameObjects in the active scene.
 19. project/inspect_build_settings (params: none) - Returns the target platform and the list of scenes currently included in the Build Settings.
 20. project/get_asset_guid (params: ""path"") - Returns the unique Unity GUID for an asset path. Use this for stable asset tracking.
+21. scene/inspect_component (params: ""path"", ""component"") - Returns all public properties and fields of a specific component. Use this to discover exact property names (e.g. bodyType) before using set_component_property.
 
 Wait for the [Observation] from the system before proceeding.";
 
@@ -149,7 +150,9 @@ Available Tools:
 6. scene/modify_node (params: ""path"", ""property"", ""value"") - Edits a GameObject.
 7. scene/inspect_node (params: ""path"") - Returns an object's components.
 8. editor/read_console (params: none) - Returns the latest warnings/errors.
-9. scene/list_all_nodes (params: none) - Returns a list of all root GameObjects.";
+9. scene/list_all_nodes (params: none) - Returns a list of all root GameObjects.
+10. scene/inspect_component (params: ""path"", ""component"") - Lists properties of a specific component.
+11. scene/set_component_property (params: ""path"", ""component"", ""property"", ""value"") - Sets a property on a component.";
 
         public void ProcessPrompt(string prompt, string model, string turnId, Action<string, bool> onComplete)
         {
@@ -792,6 +795,8 @@ Available Tools:
                 result = MCPToolRegistry.ModifyNode(p.path, p.property, p.value);
             else if (toolCall.method == "scene/inspect_node")
                 result = MCPToolRegistry.InspectNode(p.path);
+            else if (toolCall.method == "scene/inspect_component")
+                result = MCPToolRegistry.InspectComponent(p.path, p.component);
             else if (toolCall.method == "scene/set_component_property")
                 result = MCPToolRegistry.SetComponentProperty(p.path, p.component, p.property, p.value);
             else if (toolCall.method == "editor/read_console")
