@@ -40,9 +40,25 @@ namespace Omnisense
             public ChatMessage message;
         }
 
+        [Serializable]
+        public class ManagerEvaluation
+        {
+            public bool is_complete;
+            public string feedback;
+        }
+
+        [Serializable]
+        public class PlannerResponse
+        {
+            public List<string> tasks;
+        }
+
         private List<ChatMessage> _history = new List<ChatMessage>();
         private int _turnToolCount = 0;
         private bool _isReflecting = false;
+        private bool _isManagerEvaluating = false;
+        private bool _isPlanning = false;
+        private Queue<string> _pendingTasks = new Queue<string>();
         private int _stepCount = 0;
         private const int MAX_STEPS = 10;
         private List<string> _actionHistory = new List<string>();
@@ -86,9 +102,8 @@ When a user makes a request, do not just fulfill the explicit text. Identify and
 4. **Project DNA**: You have a long-term memory file called `.omnisense_dna.md`. If you learn something new about the project's architecture, folder structure, or naming conventions, you MUST use `project/update_dna` to record it.
 
 ### OPERATIONAL LOOP: ReAct + Plan
-1. **Plan**: Output a `<thought>` block first. Break the request into explicit tasks AND implicit dependency tasks.
-2. **Act**: Use the MCP tools.
-3. **Observe**: Review the result of your tool call.
+1. **Plan & Act**: Output a `<thought>` block to plan your steps, then IMMEDIATELY output the ```mcp_json tool block in the SAME message. NEVER stop generating after a thought block.
+2. **Observe**: Review the result of your tool call.
 4. **Reflect**: Before telling the user you are done, ask yourself: ""Is this object in a broken state? Are any references null?"" Fix them if needed.
 5. **Proactivity**: DO NOT ask for permission to investigate or fix issues. If you need to read a file, inspect a node, or write code to solve the user's problem, DO IT IMMEDIATELY using the tools. Never stop midway to ask if you should continue.
 
@@ -112,9 +127,9 @@ Available Tools:
 7. project/create_prefab (params: ""path"", ""destinationAssetPath"") - Converts a scene GameObject into a project asset. 'path' is the scene path, 'destinationAssetPath' is the save location (e.g., ""Assets/Prefabs/Player.prefab"").
 8. project/create_tag_or_layer (params: ""type"", ""name"") - Creates a new Tag or Layer in Project Settings. 'type' is ""Tag"" or ""Layer"".
 9. scene/instantiate_node (params: ""type"", ""name"") - Creates a GameObject. 'type' can be a primitive (Cube, Sphere, Capsule, Cylinder, Plane, Quad) or 'GameObject' for an empty object.
-10. scene/modify_node (params: ""path"", ""property"", ""value"") - Edits a GameObject. Supported properties: name, position (x,y,z), add_component (Type), remove_component (Type), tag (string), layer (string).
-11. scene/inspect_node (params: ""path"") - Returns an object's components.
-12. scene/set_component_property (params: ""path"", ""component"", ""property"", ""value"") - Sets a property on a component.
+10. scene/modify_node (params: ""path"", ""property"", ""value"") - Edits a Scene GameObject OR a Project Prefab (e.g. ""Assets/Enemy.prefab""). Supported properties: name, position (x,y,z), add_component (Type), remove_component (Type), tag (string), layer (string).
+11. scene/inspect_node (params: ""path"") - Returns an object's or prefab's components.
+12. scene/set_component_property (params: ""path"", ""component"", ""property"", ""value"") - Sets a property on a component (supports both GameObjects and Prefabs).
 13. editor/read_console (params: none) - Returns the latest 30 warnings/errors.
 14. project/list_tags_and_layers (params: none) - Returns a list of all Tags and Layers defined in the project. Use this before creating or assigning tags to verify existence.
 15. project/search_assets (params: ""query"") - Uses AssetDatabase.FindAssets to find assets by name, type (e.g. ""t:Prefab""), or label.
@@ -125,11 +140,11 @@ Available Tools:
 20. project/get_asset_guid (params: ""path"") - Returns the unique Unity GUID for an asset path. Use this for stable asset tracking.
 21. scene/inspect_component (params: ""path"", ""component"") - Returns all public properties and fields of a specific component. Use this to discover exact property names (e.g. bodyType) before using set_component_property.
 
-Wait for the [Observation] from the system before proceeding.";
+Wait for the [Observation] from the system ONLY AFTER you have output a tool block.";
 
         private const string SYSTEM_PROMPT_LITE = @"You are the Omnisense Assistant, a helpful AI developer agent.
-Your goal is to execute commands to help the user. Think step by step using a <thought> block before calling any tool.
-Wait for the [Observation] from the system before proceeding.
+Your goal is to execute commands to help the user. Think step by step using a <thought> block, and THEN IMMEDIATELY output your tool call in the same message. NEVER stop generating after a thought block.
+Wait for the [Observation] from the system ONLY AFTER you have output a tool block.
 
 You have access to the following MCP tools. To use a tool, output exactly this format:
 ```mcp_json
@@ -147,8 +162,8 @@ Available Tools:
 3. project/write_file (params: ""path"", ""content"") - Creates a NEW file.
 4. project/edit_file (params: ""path"", ""search_block"", ""replace_block"") - Edits existing files. Use exact string matches for search_block.
 5. scene/instantiate_node (params: ""type"", ""name"") - Creates a GameObject.
-6. scene/modify_node (params: ""path"", ""property"", ""value"") - Edits a GameObject.
-7. scene/inspect_node (params: ""path"") - Returns an object's components.
+6. scene/modify_node (params: ""path"", ""property"", ""value"") - Edits a GameObject or Prefab.
+7. scene/inspect_node (params: ""path"") - Returns an object/prefab's components.
 8. editor/read_console (params: none) - Returns the latest warnings/errors.
 9. scene/list_all_nodes (params: none) - Returns a list of all root GameObjects.
 10. scene/inspect_component (params: ""path"", ""component"") - Lists properties of a specific component.
@@ -160,6 +175,7 @@ Available Tools:
             Debug.Log($"[Omnisense-Diagnostics] Processing prompt (Length: {prompt?.Length ?? 0} chars) with model: {model}");
             _turnToolCount = 0;
             _isReflecting = false;
+            _isManagerEvaluating = false;
             _isAborted = false;
             _stepCount = 0;
             _actionHistory.Clear();
@@ -191,8 +207,33 @@ Available Tools:
                     _history[0].content = promptToUse;
                 }
             }
-            _history.Add(new ChatMessage { role = "user", content = prompt });
+
+            // Route to Planner instead of executing directly
+            _isPlanning = true;
+            _pendingTasks.Clear();
+
+            _history.Add(new ChatMessage { role = "user", content = $"PLANNER REQUEST: You are the Planner Agent. Break down the user's request into a strict, chronological checklist of sub-tasks. Output ONLY a valid JSON array in this exact format: {{\"tasks\": [\"Task 1 description\", \"Task 2 description\"]}}. Do not execute any tools yet.\n\nUser Request: {prompt}" });
             SaveHistory();
+
+            onComplete?.Invoke("[System]: Analyzing request and creating execution plan...", false);
+            ExecuteRequest(model, onComplete);
+        }
+
+        private void StartNextTask(string model, Action<string, bool> onComplete)
+        {
+            if (_pendingTasks.Count == 0)
+            {
+                Debug.Log("[Omnisense-Orchestration] StartNextTask called but queue is empty.");
+                onComplete?.Invoke("[System]: All tasks in the execution plan have been successfully completed.", true);
+                return;
+            }
+
+            string nextTask = _pendingTasks.Dequeue();
+            Debug.Log($"[Omnisense-Orchestration] Starting Sub-Task: {nextTask}");
+            _history.Add(new ChatMessage { role = "user", content = $"[Sub-Task]: {nextTask}\n\nPlease execute this step using your MCP tools. If you are finished with this sub-task, summarize your work." });
+            SaveHistory();
+            
+            onComplete?.Invoke($"\n<color=#00FFFF><b>[Executing Task]:</b> {nextTask}</color>\n", false);
             ExecuteRequest(model, onComplete);
         }
 
@@ -590,6 +631,121 @@ Available Tools:
 
         private void HandleResponse(string response, string model, Action<string, bool> onComplete)
         {
+            if (_isPlanning)
+            {
+                Debug.Log($"[Omnisense-Orchestration] Planning Response Received. Parsing Task List...");
+                _isPlanning = false;
+                
+                // Remove the Planner prompt to keep history clean for the worker
+                if (_history.Count > 0 && _history[_history.Count - 1].content.StartsWith("PLANNER REQUEST:"))
+                {
+                    _history.RemoveAt(_history.Count - 1);
+                }
+
+                try 
+                {
+                    string json = response.Replace("```json", "").Replace("```", "").Trim();
+                    int startIdx = json.IndexOf('{');
+                    int endIdx = json.LastIndexOf('}');
+                    if (startIdx >= 0 && endIdx >= startIdx) 
+                    {
+                        json = json.Substring(startIdx, endIdx - startIdx + 1);
+                        var plan = JsonUtility.FromJson<PlannerResponse>(json);
+                        if (plan != null && plan.tasks != null) 
+                        {
+                            foreach (var t in plan.tasks) _pendingTasks.Enqueue(t);
+                            Debug.Log($"[Omnisense-Orchestration] Plan Parsed Successfully: {_pendingTasks.Count} sub-tasks queued.");
+                        }
+                    }
+                } 
+                catch { Debug.LogWarning("[Omnisense] Failed to parse Execution Plan JSON. Defaulting to single task."); }
+
+                if (_pendingTasks.Count == 0)
+                {
+                    _pendingTasks.Enqueue("Execute the user's request.");
+                }
+
+                string planUi = "<b>[Manager] Execution Plan Created:</b>\n";
+                int idx = 1;
+                foreach (var t in _pendingTasks) planUi += $"{idx++}. {t}\n";
+                
+                _history.Add(new ChatMessage { role = "assistant", content = planUi });
+                SaveHistory();
+
+                StartNextTask(model, onComplete);
+                return;
+            }
+
+            if (_isManagerEvaluating)
+            {
+                _isManagerEvaluating = false;
+                Debug.Log("[Omnisense-Orchestration] Manager Audit Response Received. Evaluating results...");
+                
+                // Remove the Manager prompt from history to keep it clean
+                if (_history.Count > 0 && _history[_history.Count - 1].content.StartsWith("MANAGER AUDIT:"))
+                {
+                    _history.RemoveAt(_history.Count - 1);
+                }
+
+                bool isComplete = true;
+                string feedback = "Completed.";
+                
+                try 
+                {
+                    string json = response.Replace("```json", "").Replace("```", "").Trim();
+                    int startIdx = json.IndexOf('{');
+                    int endIdx = json.LastIndexOf('}');
+                    if (startIdx >= 0 && endIdx >= startIdx) 
+                    {
+                        json = json.Substring(startIdx, endIdx - startIdx + 1);
+                        var eval = JsonUtility.FromJson<ManagerEvaluation>(json);
+                        if (eval != null) 
+                        {
+                            isComplete = eval.is_complete;
+                            feedback = eval.feedback;
+                        }
+                    }
+                } 
+                catch 
+                {
+                    Debug.LogWarning("[Omnisense] Failed to parse Manager Evaluation. Defaulting to true.");
+                }
+
+                if (isComplete)
+                {
+                    Debug.Log("[Omnisense-Orchestration] Manager Approved Task Completion.");
+                    _turnToolCount = 0;
+                    _isReflecting = false;
+                    PruneHistory();
+                    
+                    _history.Add(new ChatMessage { role = "assistant", content = $"<thought>Manager approved sub-task completion.</thought> {feedback}" });
+                    SaveHistory();
+                    
+                    if (_pendingTasks.Count > 0)
+                    {
+                        Debug.Log($"[Omnisense-Orchestration] Moving to next sub-task. ({_pendingTasks.Count} remaining)");
+                        onComplete?.Invoke($"[Manager Approved]: {feedback}", false);
+                        StartNextTask(model, onComplete);
+                    }
+                    else
+                    {
+                        Debug.Log("[Omnisense-Orchestration] All tasks approved. Loop terminating.");
+                        onComplete?.Invoke($"[Manager Approved]: All tasks complete.\n{feedback}", true);
+                    }
+                }
+                else
+                {
+                    Debug.Log($"[Omnisense-Orchestration] Manager REJECTED Completion. Feedback: {feedback}");
+                    _history.Add(new ChatMessage { role = "user", content = $"[Manager Audit Failed]: The Manager detected that the task is incomplete. Feedback: {feedback}\nPlease use tools to fix this immediately." });
+                    SaveHistory();
+                    
+                    onComplete?.Invoke($"[Manager Rejected]: {feedback}\nResuming execution...", false);
+                    ExecuteRequest(model, onComplete);
+                }
+                
+                return;
+            }
+
             _history.Add(new ChatMessage { role = "assistant", content = response });
             SaveHistory();
 
@@ -647,24 +803,40 @@ Available Tools:
             }
             else
             {
-                if (_turnToolCount > 0 && !_isReflecting)
+                string extractedThought = ExtractThought(response);
+                string textWithoutThought = string.IsNullOrEmpty(extractedThought) ? response : response.Replace($"<thought>{extractedThought}</thought>", "").Trim();
+                
+                // If the agent barely said anything outside the thought block, it's a phantom turn.
+                bool isPhantomTurn = textWithoutThought.Length < 30;
+
+                if (isPhantomTurn)
+                {
+                    Debug.Log("[Omnisense] Phantom turn detected. Nudging the model...");
+                    _history.Add(new ChatMessage { role = "user", content = "[System]\nYou created a plan but did not execute a tool. Please execute your plan by outputting a valid ```mcp_json tool block in your very next response. NEVER stop generating." });
+                    SaveHistory();
+                    string nudgeUiResponse = !string.IsNullOrEmpty(extractedThought) ? $"<thought>{extractedThought}</thought>\n\n[System]: Nudging agent to execute plan..." : "[System]: Nudging agent to execute plan...";
+                    onComplete?.Invoke(nudgeUiResponse, false);
+                    ExecuteRequest(model, onComplete);
+                }
+                else if (_turnToolCount > 0 && !_isReflecting)
                 {
                     Debug.Log("[Omnisense] Triggering proactive reflection turn...");
                     _isReflecting = true;
-                    _history.Add(new ChatMessage { role = "user", content = "[System Audit]: Actions complete. Review your changes: Are there any null references, missing components, or obvious next steps (like scene wiring) to make this feature fully functional? If yes, execute them. If no, summarize your work to the user (be sure to highlight any proactive steps you took)." });
+                    _history.Add(new ChatMessage { role = "user", content = "[System Audit]: If you are finished with the user's request, review your changes: Are there any null references, missing components, or obvious next steps to make the feature functional? If yes, execute tools to fix them. If you are NOT finished, please continue your work by using a tool. If everything is done, summarize your work to the user." });
                     SaveHistory();
                     onComplete?.Invoke(response + "\n\n[System]: Auditing changes and finalizing...", false);
                     ExecuteRequest(model, onComplete);
                 }
                 else
                 {
-                    Debug.Log("[Omnisense] Final response received. Loop complete.");
-                    _isReflecting = false;
-                    _turnToolCount = 0;
+                    Debug.Log("[Omnisense] Worker thinks it is done. Triggering Manager Evaluator...");
+                    _isManagerEvaluating = true;
                     
-                    PruneHistory();
-
-                    onComplete?.Invoke(response, true);
+                    _history.Add(new ChatMessage { role = "user", content = "MANAGER AUDIT: You are the Manager Agent. Review the chat history and the tasks above. Did the worker successfully complete the ENTIRE request (including testing and attaching scripts)? Output ONLY valid JSON in this exact format: {\"is_complete\": true/false, \"feedback\": \"If false, list exactly what is missing or broken. If true, summarize the success.\"}" });
+                    SaveHistory();
+                    
+                    onComplete?.Invoke(response + "\n\n[System]: Manager is verifying completion...", false);
+                    ExecuteRequest(model, onComplete);
                 }
             }
         }

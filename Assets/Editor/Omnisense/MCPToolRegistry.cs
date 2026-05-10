@@ -386,25 +386,35 @@ namespace Omnisense
                 return new ToolResult { success = false, error = e.Message };
             }
         }
+
+        private static GameObject FindGameObjectOrPrefab(string path)
+        {
+            // 1. Try Scene Object
+            string searchPath = path.StartsWith("/") ? path.Substring(1) : path;
+            GameObject obj = GameObject.Find(searchPath);
+            
+            // 2. Try Project Asset via explicit path
+            if (obj == null)
+            {
+                obj = AssetDatabase.LoadAssetAtPath<GameObject>(path);
+            }
+            
+            // 3. Try Project Asset via smart search
+            if (obj == null)
+            {
+                string[] guids = AssetDatabase.FindAssets($"{path} t:GameObject");
+                if (guids.Length > 0) obj = AssetDatabase.LoadAssetAtPath<GameObject>(AssetDatabase.GUIDToAssetPath(guids[0]));
+            }
+            
+            return obj;
+        }
+
         public static ToolResult SetComponentProperty(string path, string componentName, string property, string value)
         {
             Debug.Log($"[Omnisense] Tool: SetComponentProperty(path='{path}', component='{componentName}', property='{property}', value='{value}')");
             try
             {
-                string searchPath = path.StartsWith("/") ? path.Substring(1) : path;
-                GameObject obj = GameObject.Find(searchPath);
-                
-                // Fallback to Project Assets (Prefabs) via exact path or smart search
-                if (obj == null)
-                {
-                    obj = AssetDatabase.LoadAssetAtPath<GameObject>(path);
-                    if (obj == null)
-                    {
-                        string[] guids = AssetDatabase.FindAssets($"{path} t:GameObject");
-                        if (guids.Length > 0) obj = AssetDatabase.LoadAssetAtPath<GameObject>(AssetDatabase.GUIDToAssetPath(guids[0]));
-                    }
-                }
-
+                GameObject obj = FindGameObjectOrPrefab(path);
                 if (obj == null) return new ToolResult { success = false, error = $"Object/Prefab not found: {path}" };
 
                 Component comp = obj.GetComponent(componentName);
@@ -438,10 +448,8 @@ namespace Omnisense
             // Must be called on main thread
             try
             {
-                // GameObject.Find doesn't like leading slashes for root objects
-                string searchPath = path.StartsWith("/") ? path.Substring(1) : path;
-                GameObject obj = GameObject.Find(searchPath);
-                if (obj == null) return new ToolResult { success = false, error = $"Object not found at path: {searchPath} (original: {path})" };
+                GameObject obj = FindGameObjectOrPrefab(path);
+                if (obj == null) return new ToolResult { success = false, error = $"Object/Prefab not found: {path}" };
 
                 Undo.RecordObject(obj.transform, "Modify via Omnisense");
 
@@ -522,9 +530,8 @@ namespace Omnisense
             Debug.Log($"[Omnisense] Tool: InspectNode(path='{path}')");
             try
             {
-                string searchPath = path.StartsWith("/") ? path.Substring(1) : path;
-                GameObject obj = GameObject.Find(searchPath);
-                if (obj == null) return new ToolResult { success = false, error = $"Object not found: {searchPath}" };
+                GameObject obj = FindGameObjectOrPrefab(path);
+                if (obj == null) return new ToolResult { success = false, error = $"Object/Prefab not found: {path}" };
 
                 var components = obj.GetComponents<Component>();
                 List<string> compDetails = new List<string>();
@@ -553,10 +560,8 @@ namespace Omnisense
             Debug.Log($"[Omnisense] Tool: InspectComponent(path='{path}', component='{componentName}')");
             try
             {
-                string searchPath = path.StartsWith("/") ? path.Substring(1) : path;
-                GameObject obj = GameObject.Find(searchPath);
-                
-                if (obj == null) return new ToolResult { success = false, error = $"Object not found: {searchPath}" };
+                GameObject obj = FindGameObjectOrPrefab(path);
+                if (obj == null) return new ToolResult { success = false, error = $"Object/Prefab not found: {path}" };
 
                 Component comp = obj.GetComponent(componentName);
                 if (comp == null) 

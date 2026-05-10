@@ -193,4 +193,17 @@ The agent's "hands" have been specifically tuned for the Unity Editor environmen
 - **Case-Insensitive Enum Support**: Enhanced property setting to support Enums (e.g., `RigidbodyType2D`). The helper intelligently maps the agent's string input (e.g., `"Kinematic"`) to the correct enum index.
 - **Introspective Scene Discovery**: Added **`scene/inspect_component`**. This tool solves the "Agent Blindness" problem where the AI could see a component (like `Rigidbody2D`) but didn't know which of its internal fields were available for editing. The tool uses Reflection to dump a component's entire public state (properties and fields), enabling the AI to autonomously discover and modify deep engine properties that aren't exposed by standard scene-level inspection.
 
+---
 
+## 24. Multi-Agent Evaluator (Phase 23)
+- **Hierarchical Interception**: Replaced the fragile C# heuristic loop-termination logic with a true **Manager/Worker** pipeline (Phase 1). When the Worker agent believes a task is done, the Orchestrator intercepts the termination and injects a hidden `MANAGER AUDIT` prompt. 
+- **Agentic Evaluation**: A secondary LLM pass evaluates the entire chat history to determine if the user's explicit and implicit requirements have been fully met. It outputs a strictly typed `ManagerEvaluation` JSON object (`is_complete`, `feedback`).
+- **Autonomous Feedback Loops**: If the Manager rejects the work (e.g., the worker hallucinated attaching a script), the Orchestrator automatically blocks loop termination and pushes the loop back to the Worker with the Manager's exact feedback, creating a highly resilient, self-correcting ReAct cycle.
+
+---
+
+## 25. Plan-and-Solve Architecture (Phase 24)
+- **In-Context Planner**: Fully realized Phase 2 of the Multi-Agent architecture. User requests are no longer fed directly into the ReAct loop. Instead, the Orchestrator intercepts the prompt and triggers a hidden `PLANNER REQUEST`.
+- **Task Chunking**: The Planner Agent evaluates the user's intent and outputs a strictly typed `PlannerResponse` JSON array containing a chronological checklist of granular sub-tasks.
+- **Autonomous Sub-Task Delegation**: The Orchestrator manages a `_pendingTasks` queue. It pops Task 1 and feeds it to the Worker Agent. When the Worker finishes, the Manager Evaluator (Phase 23) audits the work. If approved, the Orchestrator automatically pops Task 2 and fires the next loop.
+- **Cognitive Load Reduction**: By chunking complex long-horizon requests (e.g., "Build a patrol system") into isolated atomic tasks (e.g., "1. Write script", "2. Attach to prefab"), the AI's cognitive load is drastically reduced, effectively mirroring the capabilities of SOTA agentic SWE tools.
