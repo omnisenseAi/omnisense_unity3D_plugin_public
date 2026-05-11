@@ -59,6 +59,7 @@ namespace Omnisense
         private bool _isManagerEvaluating = false;
         private bool _isPlanning = false;
         private Queue<string> _pendingTasks = new Queue<string>();
+        private string _currentTask = "";
         private int _stepCount = 0;
         private const int MAX_STEPS = 10;
         private List<string> _actionHistory = new List<string>();
@@ -228,12 +229,12 @@ Available Tools:
                 return;
             }
 
-            string nextTask = _pendingTasks.Dequeue();
-            Debug.Log($"[Omnisense-Orchestration] Starting Sub-Task: {nextTask}");
-            _history.Add(new ChatMessage { role = "user", content = $"[Sub-Task]: {nextTask}\n\nPlease execute this step using your MCP tools. If you are finished with this sub-task, summarize your work." });
+            _currentTask = _pendingTasks.Dequeue();
+            Debug.Log($"[Omnisense-Orchestration] Starting Sub-Task: {_currentTask}");
+            _history.Add(new ChatMessage { role = "user", content = $"[Sub-Task]: {_currentTask}\n\nPlease execute this step using your MCP tools. If you are finished with this sub-task, summarize your work." });
             SaveHistory();
             
-            onComplete?.Invoke($"\n<color=#00FFFF><b>[Executing Task]:</b> {nextTask}</color>\n", false);
+            onComplete?.Invoke($"\n<color=#00FFFF><b>[Executing Task]:</b> {_currentTask}</color>\n", false);
             ExecuteRequest(model, onComplete);
         }
 
@@ -832,7 +833,7 @@ Available Tools:
                     Debug.Log("[Omnisense] Worker thinks it is done. Triggering Manager Evaluator...");
                     _isManagerEvaluating = true;
                     
-                    _history.Add(new ChatMessage { role = "user", content = "MANAGER AUDIT: You are the Manager Agent. Review the chat history and the tasks above. Did the worker successfully complete the ENTIRE request (including testing and attaching scripts)? Output ONLY valid JSON in this exact format: {\"is_complete\": true/false, \"feedback\": \"If false, list exactly what is missing or broken. If true, summarize the success.\"}" });
+                    _history.Add(new ChatMessage { role = "user", content = $"MANAGER AUDIT: You are the Manager Agent. Review the chat history and evaluate the Worker's execution of the CURRENT SUB-TASK: '{_currentTask}'. Did the worker successfully complete this specific sub-task? Do NOT evaluate against the entire user request, ONLY evaluate if this specific sub-task is done. Output ONLY valid JSON in this exact format: {{\"is_complete\": true/false, \"feedback\": \"If false, list exactly what is missing from THIS sub-task. If true, summarize the success.\"}}" });
                     SaveHistory();
                     
                     onComplete?.Invoke(response + "\n\n[System]: Manager is verifying completion...", false);
@@ -912,7 +913,7 @@ Available Tools:
             return "Pending changes...";
         }
 
-        private void ExecuteToolAndResume(MCPToolRequest toolCall, string toolJson, string uiResponse, string model, Action<string, bool> onComplete)
+        private async void ExecuteToolAndResume(MCPToolRequest toolCall, string toolJson, string uiResponse, string model, Action<string, bool> onComplete)
         {
             _stepCount++;
             if (_stepCount > MAX_STEPS)
@@ -1002,6 +1003,20 @@ Available Tools:
             if (toolCall.method != "project/write_file" && toolCall.method != "project/edit_file") {
                 onComplete?.Invoke(uiResponse + "\n\n[System]: Tool executed. Analyzing results...", false);
             }
+            
+            bool wasCompiling = UnityEditor.EditorApplication.isCompiling || UnityEditor.EditorApplication.isUpdating;
+            if (wasCompiling)
+            {
+                onComplete?.Invoke(uiResponse + "\n\n[System]: Waiting for Unity to finish compiling...", false);
+                while (UnityEditor.EditorApplication.isCompiling || UnityEditor.EditorApplication.isUpdating)
+                {
+                    await System.Threading.Tasks.Task.Delay(500);
+                }
+                onComplete?.Invoke(uiResponse + "\n\n[System]: Compilation finished. Resuming execution...", false);
+            }
+
+            // Break the synchronous closure chain
+            await System.Threading.Tasks.Task.Yield();
             
             ExecuteRequest(model, onComplete);
         }

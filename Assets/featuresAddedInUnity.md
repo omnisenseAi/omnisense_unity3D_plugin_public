@@ -207,3 +207,15 @@ The agent's "hands" have been specifically tuned for the Unity Editor environmen
 - **Task Chunking**: The Planner Agent evaluates the user's intent and outputs a strictly typed `PlannerResponse` JSON array containing a chronological checklist of granular sub-tasks.
 - **Autonomous Sub-Task Delegation**: The Orchestrator manages a `_pendingTasks` queue. It pops Task 1 and feeds it to the Worker Agent. When the Worker finishes, the Manager Evaluator (Phase 23) audits the work. If approved, the Orchestrator automatically pops Task 2 and fires the next loop.
 - **Cognitive Load Reduction**: By chunking complex long-horizon requests (e.g., "Build a patrol system") into isolated atomic tasks (e.g., "1. Write script", "2. Attach to prefab"), the AI's cognitive load is drastically reduced, effectively mirroring the capabilities of SOTA agentic SWE tools.
+
+---
+
+## 26. Async Orchestration & Compiler Safety (Phase 25)
+- **Async Tool Execution**: Refactored `ExecuteToolAndResume` into an `async void` state machine. This allows the Orchestrator to break the synchronous call stack using `await Task.Yield()`, preventing stack-overflow closure leaks during long multi-step plans.
+- **Compiler Race Condition Fix**: Integrated a `WaitWhile(() => EditorApplication.isCompiling)` lock into the ReAct loop. When the agent modifies a C# script, the Orchestrator now physically freezes the agent's "brain" and yields to the Unity main thread until the assembly finishes rebuilding. This ensures the agent never attempts to attach a script before it exists in the compiled metadata.
+
+---
+
+## 27. Diagnostic Orchestration Logging (Phase 26)
+- **Console Transparency**: Implemented a comprehensive `[Omnisense-Orchestration]` logging prefix. The Unity Console now provides a real-time trace of the hierarchical agent's transitions: `Planning` -> `Task Start` -> `Audit Start` -> `Audit Approval/Rejection` -> `Task Cascade`.
+- **System Verification Logs**: Added explicit logging for when the agent enters "Compilation Wait" states or "Reflection" turns, giving developers full visibility into the internal state of the Multi-Agent system.
