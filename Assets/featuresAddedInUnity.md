@@ -232,3 +232,18 @@ The agent's "hands" have been specifically tuned for the Unity Editor environmen
 ## 29. Closure Leak & Stack Optimization (Phase 28)
 - **Closure Leak Defused**: Tracked down a massive recursive closure leak in `ExecuteRequest` where the AI was wrapping delegates in 80+ layers of anonymous lambdas. 
 - **Direct Delegate Passing**: Refactored the orchestrator to pass the `onComplete` action directly without wrapping. Moved state management (like `EditorPrefs` clearing) to the UI root callback. This ensures the delegate chain length is capped at 1, preventing the `StackOverflowException` during high-turn count operations.
+
+---
+
+## 30. JSON Bridge & KAIROS Loop (Phase 29)
+- **The JSON Bridge**: Overhauled `InspectNode`, `InspectAsset`, and `ListAllNodes` in `MCPToolRegistry.cs` to return strict, type-safe JSON payloads instead of human-readable conversational strings. This eliminates "Semantic Blindspots" where the Manager Agent would misinterpret tool output based on wording.
+- **Node Type Disambiguation**: Integrated an explicit `node_type` field (e.g., `Prefab_Asset` vs `Scene_GameObject`) into the JSON bridge. The Manager Evaluator now makes decisions based on binary flags rather than NLP guessing, ending the "Gaslighting Manager" issue.
+- **Lightweight KAIROS Loop**: Implemented an autonomous "Dispute" mechanism. When the Manager rejects a task, the Orchestrator now injects a `SYSTEM OVERRIDE` instruction forcing the Worker to verify reality via inspection tools before retrying. This prevents the agent from blindly apologizing and burning loop iterations.
+- **Manager Leniency Clause**: Updated the internal `MANAGER AUDIT` system prompt with a directive to prioritize tool-based evidence over pedantic terminology rejections, creating a more resilient and logical collaboration between agents.
+
+---
+
+## 31. Deep Prefab Path Resolution (Phase 30)
+- **SOTA Prefab Traversal**: Completely rewrote `FindGameObjectOrPrefab` and the `ModifyNode` Prefab serialization logic to support deep-path resolution strings natively (e.g. `Assets/Prefab/Enemy.prefab/Waypoints/Waypoint_1`). The system now intelligently splits paths to load the asset root via `PrefabUtility` and traverses the internal transform hierarchy to locate exact child targets.
+- **Root-to-Child Asset Instantiation**: Resolved an architectural blindspot where the agent was restricted to editing the root node of Prefab Assets. It can now directly target nested children inside an unloaded prefab asset and apply structural modifications (`add_child`, `add_component`), properly serializing back to disk via `SaveAsPrefabAsset`.
+- **System Prompt Tool Parity**: Updated both `SYSTEM_PROMPT` and `SYSTEM_PROMPT_LITE` to explicitly document the `add_child` parameter and the new deep-path syntax (`.prefab/SubNode`). This closes the knowledge gap that was forcing the agent to instantiate scene objects when attempting to build deep hierarchies inside project assets.

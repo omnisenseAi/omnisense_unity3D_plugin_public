@@ -76,8 +76,13 @@ namespace Omnisense
         {
             Debug.Log($"[Omnisense] Tool: ListAllNodes()");
             var rootObjects = UnityEngine.SceneManagement.SceneManager.GetActiveScene().GetRootGameObjects();
-            string names = string.Join(", ", rootObjects.Select(o => o.name));
-            return new ToolResult { success = true, observation = $"Root GameObjects: {names}" };
+            List<string> nodeJsonList = new List<string>();
+            foreach(var obj in rootObjects)
+            {
+                nodeJsonList.Add($"\"{obj.name}\"");
+            }
+            string json = $"{{\"node_type\": \"Scene_Roots\", \"children\": [{string.Join(", ", nodeJsonList)}]}}";
+            return new ToolResult { success = true, observation = json };
         }
 
         public static ToolResult InspectBuildSettings()
@@ -143,59 +148,66 @@ namespace Omnisense
                 
                 if (obj == null) return new ToolResult { success = false, error = $"Asset not found at path: {searchPath}" };
 
-                string info = $"Asset Name: {obj.name}\nType: {obj.GetType().Name}\n";
-
-                if (obj is GameObject go)
-                {
-                    info += "Components:\n";
-                    foreach (var comp in go.GetComponents<Component>())
-                    {
-                        if (comp != null) info += $"- {comp.GetType().Name}\n";
-                    }
-                }
-                else if (obj is Material mat)
-                {
-                    info += $"Shader: {mat.shader.name}\n";
-                }
-                else if (obj is Texture2D tex)
-                {
-                    info += $"Dimensions: {tex.width}x{tex.height}\nFormat: {tex.format}\n";
-                }
-                else if (obj is AudioClip clip)
-                {
-                    info += $"Length: {clip.length}s\nChannels: {clip.channels}\nFrequency: {clip.frequency}\n";
-                }
-
-                // Generic property dump via SerializedObject
-                info += "\nExposed Properties:\n";
+                string nodeType = (obj is GameObject) ? "Prefab_Asset" : "Asset";
+                
+                List<string> propsJson = new List<string>();
                 SerializedObject so = new SerializedObject(obj);
                 SerializedProperty prop = so.GetIterator();
                 int propCount = 0;
                 if (prop.NextVisible(true))
                 {
                     do {
-                        if (propCount++ > 30) { info += "... (truncated)"; break; }
-                        
+                        if (propCount++ > 30) break;
                         string val = "";
                         try {
                             switch(prop.propertyType) {
                                 case SerializedPropertyType.Integer: val = prop.intValue.ToString(); break;
-                                case SerializedPropertyType.Boolean: val = prop.boolValue.ToString(); break;
+                                case SerializedPropertyType.Boolean: val = prop.boolValue.ToString().ToLower(); break;
                                 case SerializedPropertyType.Float: val = prop.floatValue.ToString(); break;
-                                case SerializedPropertyType.String: val = prop.stringValue; break;
-                                case SerializedPropertyType.Color: val = prop.colorValue.ToString(); break;
-                                case SerializedPropertyType.ObjectReference: val = prop.objectReferenceValue != null ? prop.objectReferenceValue.name : "null"; break;
-                                case SerializedPropertyType.Enum: val = prop.enumDisplayNames.Length > prop.enumValueIndex && prop.enumValueIndex >= 0 ? prop.enumDisplayNames[prop.enumValueIndex] : prop.enumValueIndex.ToString(); break;
-                                case SerializedPropertyType.Vector2: val = prop.vector2Value.ToString(); break;
-                                case SerializedPropertyType.Vector3: val = prop.vector3Value.ToString(); break;
-                                default: val = $"[{prop.propertyType}]"; break;
+                                case SerializedPropertyType.String: val = $"\"{prop.stringValue.Replace("\"", "\\\"")}\""; break;
+                                case SerializedPropertyType.Color: val = $"\"{prop.colorValue.ToString()}\""; break;
+                                case SerializedPropertyType.ObjectReference: val = $"\"{(prop.objectReferenceValue != null ? prop.objectReferenceValue.name : "null")}\""; break;
+                                case SerializedPropertyType.Enum: val = $"\"{(prop.enumDisplayNames.Length > prop.enumValueIndex && prop.enumValueIndex >= 0 ? prop.enumDisplayNames[prop.enumValueIndex] : prop.enumValueIndex.ToString())}\""; break;
+                                case SerializedPropertyType.Vector2: val = $"\"{prop.vector2Value.ToString()}\""; break;
+                                case SerializedPropertyType.Vector3: val = $"\"{prop.vector3Value.ToString()}\""; break;
+                                default: val = $"\"[{prop.propertyType}]\""; break;
                             }
-                        } catch { val = "[unreadable]"; }
-                        info += $"- {prop.name}: {val}\n";
+                            if (string.IsNullOrEmpty(val)) val = "\"\"";
+                            propsJson.Add($"\"{prop.name}\": {val}");
+                        } catch {}
                     } while (prop.NextVisible(false));
                 }
 
-                return new ToolResult { success = true, observation = info };
+                string propertiesStr = $"{{{string.Join(", ", propsJson)}}}";
+
+                if (obj is GameObject go)
+                {
+                    List<string> compNames = new List<string>();
+                    foreach (var comp in go.GetComponents<Component>())
+                    {
+                        if (comp != null) compNames.Add($"\"{comp.GetType().Name}\"");
+                    }
+                    List<string> childNames = new List<string>();
+                    foreach (Transform child in go.transform)
+                    {
+                        childNames.Add($"\"{child.name}\"");
+                    }
+                    string json = $"{{\"node_type\": \"{nodeType}\", \"name\": \"{go.name}\", \"is_scene_instance\": false, \"components\": [{string.Join(", ", compNames)}], \"children\": [{string.Join(", ", childNames)}], \"properties\": {propertiesStr}}}";
+                    return new ToolResult { success = true, observation = json };
+                }
+                else if (obj is Material mat)
+                {
+                    string json = $"{{\"node_type\": \"{nodeType}\", \"name\": \"{obj.name}\", \"type\": \"Material\", \"shader\": \"{mat.shader.name}\", \"properties\": {propertiesStr}}}";
+                    return new ToolResult { success = true, observation = json };
+                }
+                else if (obj is Texture2D tex)
+                {
+                    string json = $"{{\"node_type\": \"{nodeType}\", \"name\": \"{obj.name}\", \"type\": \"Texture2D\", \"resolution\": \"{tex.width}x{tex.height}\", \"format\": \"{tex.format}\", \"properties\": {propertiesStr}}}";
+                    return new ToolResult { success = true, observation = json };
+                }
+                
+                string basicJson = $"{{\"node_type\": \"{nodeType}\", \"name\": \"{obj.name}\", \"type\": \"{obj.GetType().Name}\", \"properties\": {propertiesStr}}}";
+                return new ToolResult { success = true, observation = basicJson };
             }
             catch (Exception e)
             {
@@ -387,19 +399,47 @@ namespace Omnisense
             }
         }
 
-        private static GameObject FindGameObjectOrPrefab(string path)
+        public static GameObject FindGameObjectOrPrefab(string path)
         {
             // 1. Try Scene Object
             string searchPath = path.StartsWith("/") ? path.Substring(1) : path;
             GameObject obj = GameObject.Find(searchPath);
+            if (obj != null) return obj;
             
-            // 2. Try Project Asset via explicit path
-            if (obj == null)
+            // 2. Try Prefab Deep Path Resolution
+            int prefabExtIndex = path.IndexOf(".prefab", StringComparison.OrdinalIgnoreCase);
+            if (prefabExtIndex != -1)
             {
-                obj = AssetDatabase.LoadAssetAtPath<GameObject>(path);
+                string assetPath = path.Substring(0, prefabExtIndex + 7);
+                GameObject root = AssetDatabase.LoadAssetAtPath<GameObject>(assetPath);
+                if (root == null)
+                {
+                    string[] guids = AssetDatabase.FindAssets($"{Path.GetFileNameWithoutExtension(assetPath)} t:GameObject");
+                    if (guids.Length > 0) root = AssetDatabase.LoadAssetAtPath<GameObject>(AssetDatabase.GUIDToAssetPath(guids[0]));
+                }
+                
+                if (root == null) return null;
+                if (path.Length <= prefabExtIndex + 7) return root;
+
+                string childPath = path.Substring(prefabExtIndex + 7).TrimStart('/', '\\');
+                if (string.IsNullOrEmpty(childPath)) return root;
+
+                Transform target = root.transform.Find(childPath);
+                if (target != null) return target.gameObject;
+
+                Transform[] allChildren = root.GetComponentsInChildren<Transform>(true);
+                foreach (var child in allChildren)
+                {
+                    if (child.name == childPath || child.name == childPath.Split('/', '\\').Last())
+                    {
+                        return child.gameObject;
+                    }
+                }
+                return root; // Fallback to root if child not found
             }
             
-            // 3. Try Project Asset via smart search
+            // 3. Try Project Asset via explicit path or smart search
+            obj = AssetDatabase.LoadAssetAtPath<GameObject>(path);
             if (obj == null)
             {
                 string[] guids = AssetDatabase.FindAssets($"{path} t:GameObject");
@@ -448,15 +488,40 @@ namespace Omnisense
             // Must be called on main thread
             try
             {
-                bool isPrefab = path.EndsWith(".prefab");
+                int prefabExtIndex = path.IndexOf(".prefab", StringComparison.OrdinalIgnoreCase);
+                bool isPrefab = prefabExtIndex != -1;
                 GameObject obj = null;
                 GameObject prefabContents = null;
+                string prefabAssetPath = null;
 
                 if (isPrefab)
                 {
-                    prefabContents = PrefabUtility.LoadPrefabContents(path);
-                    if (prefabContents == null) return new ToolResult { success = false, error = $"Failed to load prefab contents: {path}" };
+                    prefabAssetPath = path.Substring(0, prefabExtIndex + 7);
+                    prefabContents = PrefabUtility.LoadPrefabContents(prefabAssetPath);
+                    if (prefabContents == null) return new ToolResult { success = false, error = $"Failed to load prefab contents: {prefabAssetPath}" };
+                    
                     obj = prefabContents;
+                    if (path.Length > prefabExtIndex + 7)
+                    {
+                        string childPath = path.Substring(prefabExtIndex + 7).TrimStart('/', '\\');
+                        if (!string.IsNullOrEmpty(childPath))
+                        {
+                            Transform target = prefabContents.transform.Find(childPath);
+                            if (target != null) obj = target.gameObject;
+                            else
+                            {
+                                Transform[] allChildren = prefabContents.GetComponentsInChildren<Transform>(true);
+                                foreach (var child in allChildren)
+                                {
+                                    if (child.name == childPath || child.name == childPath.Split('/', '\\').Last())
+                                    {
+                                        obj = child.gameObject;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
                 else
                 {
@@ -504,7 +569,7 @@ namespace Omnisense
                         }
                         if (isPrefab) 
                         {
-                            PrefabUtility.SaveAsPrefabAsset(prefabContents, path);
+                            PrefabUtility.SaveAsPrefabAsset(prefabContents, prefabAssetPath);
                             PrefabUtility.UnloadPrefabContents(prefabContents);
                         }
                         return new ToolResult { success = true, observation = $"Added component {value} to {path}" };
@@ -525,7 +590,7 @@ namespace Omnisense
                         
                         if (isPrefab) 
                         {
-                            PrefabUtility.SaveAsPrefabAsset(prefabContents, path);
+                            PrefabUtility.SaveAsPrefabAsset(prefabContents, prefabAssetPath);
                             PrefabUtility.UnloadPrefabContents(prefabContents);
                         }
                         return new ToolResult { success = true, observation = $"Removed component {value} from {path}" };
@@ -558,7 +623,7 @@ namespace Omnisense
 
                 if (isPrefab && property.ToLower() != "add_component" && property.ToLower() != "remove_component")
                 {
-                    PrefabUtility.SaveAsPrefabAsset(prefabContents, path);
+                    PrefabUtility.SaveAsPrefabAsset(prefabContents, prefabAssetPath);
                     PrefabUtility.UnloadPrefabContents(prefabContents);
                 }
 
@@ -583,27 +648,31 @@ namespace Omnisense
                 GameObject obj = FindGameObjectOrPrefab(path);
                 if (obj == null) return new ToolResult { success = false, error = $"Object/Prefab not found: {path}" };
 
+                bool isPrefab = path.EndsWith(".prefab") || PrefabUtility.IsPartOfPrefabAsset(obj);
+                string nodeType = isPrefab ? "Prefab_Asset" : "Scene_GameObject";
+
                 var components = obj.GetComponents<Component>();
                 List<string> compDetails = new List<string>();
                 foreach (var comp in components)
                 {
                     if (comp == null) continue;
-                    compDetails.Add(comp.GetType().Name);
+                    compDetails.Add($"\"{comp.GetType().Name}\"");
                 }
 
                 List<string> childDetails = new List<string>();
                 foreach (Transform child in obj.transform)
                 {
-                    childDetails.Add(child.name);
+                    childDetails.Add($"\"{child.name}\"");
                 }
-                string childStr = childDetails.Count > 0 ? $" Children: [{string.Join(", ", childDetails)}]." : " Children: [None].";
 
-                string resultStr = $"GameObject '{obj.name}' at position {obj.transform.position}. Tag: {obj.tag}, Layer: {LayerMask.LayerToName(obj.layer)}. Attached Components: [{string.Join(", ", compDetails)}].{childStr}";
-                Debug.Log($"[Omnisense] InspectNode Result: {resultStr}");
+                string pos = $"\"{obj.transform.position.x}, {obj.transform.position.y}, {obj.transform.position.z}\"";
+                string json = $"{{\"node_type\": \"{nodeType}\", \"name\": \"{obj.name}\", \"is_scene_instance\": {(!isPrefab).ToString().ToLower()}, \"position\": {pos}, \"tag\": \"{obj.tag}\", \"layer\": \"{LayerMask.LayerToName(obj.layer)}\", \"components\": [{string.Join(", ", compDetails)}], \"children\": [{string.Join(", ", childDetails)}]}}";
+                
+                Debug.Log($"[Omnisense] InspectNode Result: {json}");
                 return new ToolResult 
                 { 
                     success = true, 
-                    observation = resultStr 
+                    observation = json 
                 };
             }
             catch (Exception e)

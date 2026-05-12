@@ -128,7 +128,7 @@ Available Tools:
 7. project/create_prefab (params: ""path"", ""destinationAssetPath"") - Converts a scene GameObject into a project asset. 'path' is the scene path, 'destinationAssetPath' is the save location (e.g., ""Assets/Prefabs/Player.prefab"").
 8. project/create_tag_or_layer (params: ""type"", ""name"") - Creates a new Tag or Layer in Project Settings. 'type' is ""Tag"" or ""Layer"".
 9. scene/instantiate_node (params: ""type"", ""name"") - Creates a GameObject. 'type' can be a primitive (Cube, Sphere, Capsule, Cylinder, Plane, Quad) or 'GameObject' for an empty object.
-10. scene/modify_node (params: ""path"", ""property"", ""value"") - Edits a Scene GameObject OR a Project Prefab (e.g. ""Assets/Enemy.prefab""). Supported properties: name, position (x,y,z), add_component (Type), remove_component (Type), tag (string), layer (string).
+10. scene/modify_node (params: ""path"", ""property"", ""value"") - Edits a Scene GameObject OR a Project Prefab (e.g. ""Assets/Enemy.prefab/Waypoints""). Supported properties: name, position (x,y,z), add_child (name), add_component (Type), remove_component (Type), tag (string), layer (string).
 11. scene/inspect_node (params: ""path"") - Returns an object's or prefab's components.
 12. scene/set_component_property (params: ""path"", ""component"", ""property"", ""value"") - Sets a property on a component (supports both GameObjects and Prefabs).
 13. editor/read_console (params: none) - Returns the latest 30 warnings/errors.
@@ -163,7 +163,7 @@ Available Tools:
 3. project/write_file (params: ""path"", ""content"") - Creates a NEW file.
 4. project/edit_file (params: ""path"", ""search_block"", ""replace_block"") - Edits existing files. Use exact string matches for search_block.
 5. scene/instantiate_node (params: ""type"", ""name"") - Creates a GameObject.
-6. scene/modify_node (params: ""path"", ""property"", ""value"") - Edits a GameObject or Prefab.
+6. scene/modify_node (params: ""path"", ""property"", ""value"") - Edits a Scene GameObject OR a Project Prefab (e.g. ""Assets/Enemy.prefab/Waypoints""). Supported properties: name, position (x,y,z), add_child (name), add_component (Type), remove_component (Type), tag (string), layer (string).
 7. scene/inspect_node (params: ""path"") - Returns an object/prefab's components.
 8. editor/read_console (params: none) - Returns the latest warnings/errors.
 9. scene/list_all_nodes (params: none) - Returns a list of all root GameObjects.
@@ -722,7 +722,7 @@ Available Tools:
                 else
                 {
                     Debug.Log($"[Omnisense-Orchestration] Manager REJECTED Completion. Feedback: {feedback}");
-                    _history.Add(new ChatMessage { role = "user", content = $"[Manager Audit Failed]: The Manager detected that the task is incomplete. Feedback: {feedback}\nPlease use tools to fix this immediately." });
+                    _history.Add(new ChatMessage { role = "user", content = $"[Manager Audit Failed]: The Manager detected that the task is incomplete. Feedback: {feedback}\n\nSYSTEM OVERRIDE: Do not immediately rewrite code or retry the action. First, use your read/inspect tools to explicitly verify if the Manager's rejection is factually accurate based on the current project state." });
                     SaveHistory();
                     
                     onComplete?.Invoke($"[Manager Rejected]: {feedback}\nResuming execution...", false);
@@ -818,7 +818,7 @@ Available Tools:
                     Debug.Log("[Omnisense] Worker thinks it is done. Triggering Manager Evaluator...");
                     _isManagerEvaluating = true;
                     
-                    _history.Add(new ChatMessage { role = "user", content = $"MANAGER AUDIT: You are the Manager Agent. Review the chat history and evaluate the Worker's execution of the CURRENT SUB-TASK: '{_currentTask}'. Did the worker successfully complete this specific sub-task? Do NOT evaluate against the entire user request, ONLY evaluate if this specific sub-task is done. Output ONLY valid JSON in this exact format: {{\"is_complete\": true/false, \"feedback\": \"If false, list exactly what is missing from THIS sub-task. If true, summarize the success.\"}}" });
+                    _history.Add(new ChatMessage { role = "user", content = $"MANAGER AUDIT: You are the Manager Agent. Review the chat history and evaluate the Worker's execution of the CURRENT SUB-TASK: '{_currentTask}'. Did the worker successfully complete this specific sub-task? Do NOT evaluate against the entire user request, ONLY evaluate if this specific sub-task is done. Do not be overly pedantic about terminology. If the worker provides tool output (such as InspectNode) that reasonably shows the requested change exists, approve the task. Remember that Unity Prefab Assets are often displayed as 'GameObjects' or '[Prefab Asset]' in tool outputs. Output ONLY valid JSON in this exact format: {{\"is_complete\": true/false, \"feedback\": \"If false, list exactly what is missing from THIS sub-task. If true, summarize the success.\"}}" });
                     SaveHistory();
                     
                     onComplete?.Invoke(response + "\n\n[System]: Manager is verifying completion...", false);
