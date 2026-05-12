@@ -448,10 +448,22 @@ namespace Omnisense
             // Must be called on main thread
             try
             {
-                GameObject obj = FindGameObjectOrPrefab(path);
-                if (obj == null) return new ToolResult { success = false, error = $"Object/Prefab not found: {path}" };
+                bool isPrefab = path.EndsWith(".prefab");
+                GameObject obj = null;
+                GameObject prefabContents = null;
 
-                Undo.RecordObject(obj.transform, "Modify via Omnisense");
+                if (isPrefab)
+                {
+                    prefabContents = PrefabUtility.LoadPrefabContents(path);
+                    if (prefabContents == null) return new ToolResult { success = false, error = $"Failed to load prefab contents: {path}" };
+                    obj = prefabContents;
+                }
+                else
+                {
+                    obj = FindGameObjectOrPrefab(path);
+                    if (obj == null) return new ToolResult { success = false, error = $"Object not found: {path}" };
+                    Undo.RecordObject(obj.transform, "Modify via Omnisense");
+                }
 
                 if (property.ToLower() == "position")
                 {
@@ -462,6 +474,14 @@ namespace Omnisense
                 else if (property.ToLower() == "name")
                 {
                     obj.name = value;
+                }
+                else if (property.ToLower() == "add_child")
+                {
+                    string childName = value.Replace("GameObject:", "").Trim();
+                    GameObject newChild = new GameObject(childName);
+                    newChild.transform.SetParent(obj.transform);
+                    newChild.transform.localPosition = Vector3.zero;
+                    if (!isPrefab) Undo.RegisterCreatedObjectUndo(newChild, "Add Child via Omnisense");
                 }
                 else if (property.ToLower() == "add_component")
                 {
@@ -476,15 +496,22 @@ namespace Omnisense
 
                     if (componentType != null)
                     {
-                        var comp = Undo.AddComponent(obj, componentType);
+                        var comp = isPrefab ? obj.AddComponent(componentType) : Undo.AddComponent(obj, componentType);
                         if (comp == null)
                         {
+                            if (isPrefab) PrefabUtility.UnloadPrefabContents(prefabContents);
                             return new ToolResult { success = false, error = $"Failed to add component '{value}'. It may conflict with existing components (e.g., trying to add 2D physics to 3D Rigidbody)." };
+                        }
+                        if (isPrefab) 
+                        {
+                            PrefabUtility.SaveAsPrefabAsset(prefabContents, path);
+                            PrefabUtility.UnloadPrefabContents(prefabContents);
                         }
                         return new ToolResult { success = true, observation = $"Added component {value} to {path}" };
                     }
                     else
                     {
+                        if (isPrefab) PrefabUtility.UnloadPrefabContents(prefabContents);
                         return new ToolResult { success = false, error = $"Component type '{value}' not found in any loaded assembly." };
                     }
                 }
@@ -493,11 +520,19 @@ namespace Omnisense
                     var component = obj.GetComponent(value);
                     if (component != null)
                     {
-                        Undo.DestroyObjectImmediate(component);
+                        if (isPrefab) UnityEngine.Object.DestroyImmediate(component);
+                        else Undo.DestroyObjectImmediate(component);
+                        
+                        if (isPrefab) 
+                        {
+                            PrefabUtility.SaveAsPrefabAsset(prefabContents, path);
+                            PrefabUtility.UnloadPrefabContents(prefabContents);
+                        }
                         return new ToolResult { success = true, observation = $"Removed component {value} from {path}" };
                     }
                     else
                     {
+                        if (isPrefab) PrefabUtility.UnloadPrefabContents(prefabContents);
                         return new ToolResult { success = false, error = $"Component {value} not found on {path}" };
                     }
                 }
@@ -508,8 +543,23 @@ namespace Omnisense
                 else if (property.ToLower() == "layer")
                 {
                     int layer = LayerMask.NameToLayer(value);
-                    if (layer == -1) return new ToolResult { success = false, error = $"Layer '{value}' does not exist. Use a valid Unity layer." };
+                    if (layer == -1) 
+                    {
+                        if (isPrefab) PrefabUtility.UnloadPrefabContents(prefabContents);
+                        return new ToolResult { success = false, error = $"Layer '{value}' does not exist. Use a valid Unity layer." };
+                    }
                     obj.layer = layer;
+                }
+                else 
+                {
+                    if (isPrefab) PrefabUtility.UnloadPrefabContents(prefabContents);
+                    return new ToolResult { success = false, error = $"Unsupported property: {property}" };
+                }
+
+                if (isPrefab && property.ToLower() != "add_component" && property.ToLower() != "remove_component")
+                {
+                    PrefabUtility.SaveAsPrefabAsset(prefabContents, path);
+                    PrefabUtility.UnloadPrefabContents(prefabContents);
                 }
 
                 if (!string.IsNullOrEmpty(_lastNativeError))
@@ -541,7 +591,14 @@ namespace Omnisense
                     compDetails.Add(comp.GetType().Name);
                 }
 
-                string resultStr = $"GameObject '{obj.name}' at position {obj.transform.position}. Tag: {obj.tag}, Layer: {LayerMask.LayerToName(obj.layer)}. Attached Components: " + string.Join(", ", compDetails);
+                List<string> childDetails = new List<string>();
+                foreach (Transform child in obj.transform)
+                {
+                    childDetails.Add(child.name);
+                }
+                string childStr = childDetails.Count > 0 ? $" Children: [{string.Join(", ", childDetails)}]." : " Children: [None].";
+
+                string resultStr = $"GameObject '{obj.name}' at position {obj.transform.position}. Tag: {obj.tag}, Layer: {LayerMask.LayerToName(obj.layer)}. Attached Components: [{string.Join(", ", compDetails)}].{childStr}";
                 Debug.Log($"[Omnisense] InspectNode Result: {resultStr}");
                 return new ToolResult 
                 { 

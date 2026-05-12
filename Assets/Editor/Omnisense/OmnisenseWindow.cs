@@ -542,7 +542,10 @@ namespace Omnisense
             ToggleStopButton(true);
 
             AIOrchestrator.Instance.ProcessPrompt(contextText + text, _modelSelector.value, turnId, (response, isFinal) => {
-                if (isFinal) ToggleStopButton(false);
+                if (isFinal) {
+                    ToggleStopButton(false);
+                    EditorPrefs.SetBool("Omnisense_AI_PendingResume", false);
+                }
                 if (isFinal && _loadingIndicator != null)
                 {
                     if (_chatHistory.Contains(_loadingIndicator)) _chatHistory.Remove(_loadingIndicator);

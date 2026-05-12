@@ -266,38 +266,23 @@ Available Tools:
             // Prepare request based on provider
             if (model.StartsWith("gpt") || model.StartsWith("o3"))
             {
-                CallOpenAI(apiKey, model, (resp, final) => {
-                    if (final) EditorPrefs.SetBool("Omnisense_AI_PendingResume", false);
-                    onComplete?.Invoke(resp, final);
-                });
+                CallOpenAI(apiKey, model, onComplete);
             }
             else if (model.StartsWith("claude"))
             {
-                CallAnthropic(apiKey, model, (resp, final) => {
-                    if (final) EditorPrefs.SetBool("Omnisense_AI_PendingResume", false);
-                    onComplete?.Invoke(resp, final);
-                });
+                CallAnthropic(apiKey, model, onComplete);
             }
             else if (model.StartsWith("gemini"))
             {
-                CallGemini(apiKey, model, (resp, final) => {
-                    if (final) EditorPrefs.SetBool("Omnisense_AI_PendingResume", false);
-                    onComplete?.Invoke(resp, final);
-                });
+                CallGemini(apiKey, model, onComplete);
             }
             else if (model.StartsWith("grok"))
             {
-                CallGrok(apiKey, model, (resp, final) => {
-                    if (final) EditorPrefs.SetBool("Omnisense_AI_PendingResume", false);
-                    onComplete?.Invoke(resp, final);
-                });
+                CallGrok(apiKey, model, onComplete);
             }
             else if (model == "self-hosted")
             {
-                CallSelfHosted(apiKey, model, (resp, final) => {
-                    if (final) EditorPrefs.SetBool("Omnisense_AI_PendingResume", false);
-                    onComplete?.Invoke(resp, final);
-                });
+                CallSelfHosted(apiKey, model, onComplete);
             }
             else
             {

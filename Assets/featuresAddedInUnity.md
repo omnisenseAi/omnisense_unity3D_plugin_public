@@ -219,3 +219,16 @@ The agent's "hands" have been specifically tuned for the Unity Editor environmen
 ## 27. Diagnostic Orchestration Logging (Phase 26)
 - **Console Transparency**: Implemented a comprehensive `[Omnisense-Orchestration]` logging prefix. The Unity Console now provides a real-time trace of the hierarchical agent's transitions: `Planning` -> `Task Start` -> `Audit Start` -> `Audit Approval/Rejection` -> `Task Cascade`.
 - **System Verification Logs**: Added explicit logging for when the agent enters "Compilation Wait" states or "Reflection" turns, giving developers full visibility into the internal state of the Multi-Agent system.
+
+---
+
+## 28. Prefab Serialization & Hierarchy Visibility (Phase 27)
+- **PrefabUtility Integration**: Updated `ModifyNode` to use `PrefabUtility.LoadPrefabContents` and `SaveAsPrefabAsset`. This allows the agent to natively edit un-instantiated prefab assets on disk, rather than just modifying in-memory GameObjects that Unity would discard.
+- **Native Hierarchy Injection**: Implemented the `add_child` command. The AI can now programmatically build complex parent-child structures (e.g., creating a "Waypoints" folder under a prefab root) in a single turn.
+- **Hierarchy Awareness**: Overhauled `InspectNode` to explicitly list all children of a GameObject in its tool observation. This solves "Manager Blindness" where the Auditor would falsely reject a task because it couldn't see the children created by the Worker.
+
+---
+
+## 29. Closure Leak & Stack Optimization (Phase 28)
+- **Closure Leak Defused**: Tracked down a massive recursive closure leak in `ExecuteRequest` where the AI was wrapping delegates in 80+ layers of anonymous lambdas. 
+- **Direct Delegate Passing**: Refactored the orchestrator to pass the `onComplete` action directly without wrapping. Moved state management (like `EditorPrefs` clearing) to the UI root callback. This ensures the delegate chain length is capped at 1, preventing the `StackOverflowException` during high-turn count operations.
