@@ -262,3 +262,9 @@ The agent's "hands" have been specifically tuned for the Unity Editor environmen
 - **Comma-Separated Resolution**: The backend now intelligently parses comma-separated strings (e.g., `"waypoint_1, waypoint_2"`) provided by the agent. It automatically resizes the underlying Unity collection and resolves each object reference or primitive value using the existing type-safe pipeline.
 - **Complex Script Integration**: This resolves a major bottleneck where the agent could modify simple properties but struggled to populate data-heavy scripts like Patrol systems or Inventory lists, enabling full automation of complex game logic wiring.
 
+---
+
+## 34. Prefab Persistence & Prompt Hardening (Phase 33)
+- **Prefab-Aware Component Editing**: Refactored `SetComponentProperty` in `MCPToolRegistry.cs` to use the `LoadPrefabContents`/`SaveAsPrefabAsset` cycle. This ensures that modifications to script properties on project assets are actually committed to disk, resolving the "silent failure" where changes were lost on reload.
+- **Unified Deep-Path Resolution**: Integrated `FindGameObjectOrPrefab` into the `ObjectReference` resolution pipeline in `UnityComponentHelper.cs`. This allows the agent to assign nested prefab children (e.g., `Assets/Prefab/Enemy.prefab/Waypoints/waypoint_1`) directly to script fields and arrays.
+- **Tool Schema Enforcement**: Hardened the `SYSTEM_PROMPT` by explicitly documenting the comma-separated array assignment syntax. This prevents the LLM from attempting to use Unity's internal `.Array.size` or `.Array.data[i]` notation, which are not supported by the reflection-based backend.
