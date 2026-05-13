@@ -130,7 +130,7 @@ Available Tools:
 9. scene/instantiate_node (params: ""type"", ""name"") - Creates a GameObject. 'type' can be a primitive (Cube, Sphere, Capsule, Cylinder, Plane, Quad) or 'GameObject' for an empty object.
 10. scene/modify_node (params: ""path"", ""property"", ""value"") - Edits a Scene GameObject OR a Project Prefab (e.g. ""Assets/Enemy.prefab/Waypoints""). Supported properties: name, position (x,y,z), add_child (name), add_component (Type), remove_component (Type), tag (string), layer (string).
 11. scene/inspect_node (params: ""path"") - Returns an object's or prefab's components.
-12. scene/set_component_property (params: ""path"", ""component"", ""property"", ""value"") - Sets a property on a component (supports both GameObjects and Prefabs).
+12. scene/set_component_property (params: ""path"", ""component"", ""property"", ""value"") - Sets a property on a component (supports both GameObjects and Prefabs). For standard properties (float, bool, string), pass the value directly (e.g. '5', 'true'). **For Arrays or Lists (e.g. List<Transform>, Transform[]), pass a comma-separated string of deep object paths (e.g. 'Assets/Prefab/Enemy.prefab/Waypoints/waypoint_1, Assets/Prefab/Enemy.prefab/Waypoints/waypoint_2'). NEVER use Unity-internal paths like 'property.Array.size' or 'property.Array.data[0]'.**
 13. editor/read_console (params: none) - Returns the latest 30 warnings/errors.
 14. project/list_tags_and_layers (params: none) - Returns a list of all Tags and Layers defined in the project. Use this before creating or assigning tags to verify existence.
 15. project/search_assets (params: ""query"") - Uses AssetDatabase.FindAssets to find assets by name, type (e.g. ""t:Prefab""), or label.
@@ -168,7 +168,7 @@ Available Tools:
 8. editor/read_console (params: none) - Returns the latest warnings/errors.
 9. scene/list_all_nodes (params: none) - Returns a list of all root GameObjects.
 10. scene/inspect_component (params: ""path"", ""component"") - Lists properties of a specific component.
-11. scene/set_component_property (params: ""path"", ""component"", ""property"", ""value"") - Sets a property on a component.";
+11. scene/set_component_property (params: ""path"", ""component"", ""property"", ""value"") - Sets a property on a component. For Arrays or Lists (e.g. List<Transform>), pass a comma-separated string of deep object paths (e.g. 'Assets/Prefab/Enemy.prefab/Waypoints/waypoint_1, Assets/Prefab/Enemy.prefab/Waypoints/waypoint_2'). NEVER use .Array.size or .Array.data[i] notation.";
 
         public void ProcessPrompt(string prompt, string model, string turnId, Action<string, bool> onComplete)
         {
@@ -918,10 +918,13 @@ Available Tools:
                 int n = _actionHistory.Count;
                 if (_actionHistory[n-1] == _actionHistory[n-2] && _actionHistory[n-2] == _actionHistory[n-3])
                 {
-                    string loopMsg = "\n\n[System Warning]: Loop detected! You have attempted the exact same action 3 times. Change your strategy or ask the user for help.";
-                    onComplete?.Invoke(uiResponse + loopMsg, true);
-                    _history.Add(new ChatMessage { role = "user", content = "[System]: Loop detected. You must change your approach." });
+                    _pendingTasks.Clear();
+                    string overrideMsg = "[System Intervention]: Redundant tool execution loop detected. The current task is either already complete or impossible with current tools. The task queue has been flushed. Summarize the current state for the user and await further instructions.";
+                    _history.Add(new ChatMessage { role = "user", content = overrideMsg });
                     SaveHistory();
+                    
+                    onComplete?.Invoke(uiResponse + "\n\n[System Intervention]: Loop detected. Flushing task queue and requesting summary...", false);
+                    ExecuteRequest(model, onComplete);
                     return;
                 }
             }

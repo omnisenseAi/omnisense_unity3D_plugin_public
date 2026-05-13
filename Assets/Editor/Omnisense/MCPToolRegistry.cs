@@ -454,24 +454,61 @@ namespace Omnisense
             Debug.Log($"[Omnisense] Tool: SetComponentProperty(path='{path}', component='{componentName}', property='{property}', value='{value}')");
             try
             {
-                GameObject obj = FindGameObjectOrPrefab(path);
-                if (obj == null) return new ToolResult { success = false, error = $"Object/Prefab not found: {path}" };
+                int prefabExtIndex = path.IndexOf(".prefab", StringComparison.OrdinalIgnoreCase);
+                bool isPrefab = prefabExtIndex != -1;
+                GameObject obj = null;
+                string prefabAssetPath = null;
+                GameObject prefabContents = null;
+
+                if (isPrefab)
+                {
+                    // Use PrefabUtility for correct read-write access on disk
+                    prefabAssetPath = path.Substring(0, prefabExtIndex + 7);
+                    prefabContents = PrefabUtility.LoadPrefabContents(prefabAssetPath);
+                    if (prefabContents == null) return new ToolResult { success = false, error = $"Failed to load prefab contents: {prefabAssetPath}" };
+
+                    obj = prefabContents;
+                    // Support deep paths (e.g. Assets/Prefab/Enemy.prefab/Waypoints)
+                    if (path.Length > prefabExtIndex + 7)
+                    {
+                        string childPath = path.Substring(prefabExtIndex + 7).TrimStart('/', '\\');
+                        if (!string.IsNullOrEmpty(childPath))
+                        {
+                            Transform target = prefabContents.transform.Find(childPath);
+                            if (target != null) obj = target.gameObject;
+                        }
+                    }
+                }
+                else
+                {
+                    obj = FindGameObjectOrPrefab(path);
+                    if (obj == null) return new ToolResult { success = false, error = $"Object/Prefab not found: {path}" };
+                }
 
                 Component comp = obj.GetComponent(componentName);
                 if (comp == null) 
                 {
-                    // Case insensitive search
                     Component[] allComps = obj.GetComponents<Component>();
                     comp = Array.Find(allComps, c => c != null && c.GetType().Name.Equals(componentName, StringComparison.OrdinalIgnoreCase));
-                    if (comp == null) return new ToolResult { success = false, error = $"Component '{componentName}' not found on {path}" };
+                    if (comp == null)
+                    {
+                        if (isPrefab) PrefabUtility.UnloadPrefabContents(prefabContents);
+                        return new ToolResult { success = false, error = $"Component '{componentName}' not found on {path}" };
+                    }
                 }
 
                 if (UnityComponentHelper.SetProperty(comp, property, value, out string errorMsg))
                 {
+                    if (isPrefab)
+                    {
+                        PrefabUtility.SaveAsPrefabAsset(prefabContents, prefabAssetPath);
+                        PrefabUtility.UnloadPrefabContents(prefabContents);
+                    }
                     return new ToolResult { success = true, observation = $"Successfully set {property} = {value} on {componentName} ({path})" };
                 }
                 else
                 {
+                    if (isPrefab) PrefabUtility.UnloadPrefabContents(prefabContents);
                     return new ToolResult { success = false, error = errorMsg };
                 }
             }
@@ -480,6 +517,7 @@ namespace Omnisense
                 return new ToolResult { success = false, error = e.Message };
             }
         }
+
 
         public static ToolResult ModifyNode(string path, string property, string value)
         {

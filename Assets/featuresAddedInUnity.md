@@ -247,3 +247,18 @@ The agent's "hands" have been specifically tuned for the Unity Editor environmen
 - **SOTA Prefab Traversal**: Completely rewrote `FindGameObjectOrPrefab` and the `ModifyNode` Prefab serialization logic to support deep-path resolution strings natively (e.g. `Assets/Prefab/Enemy.prefab/Waypoints/Waypoint_1`). The system now intelligently splits paths to load the asset root via `PrefabUtility` and traverses the internal transform hierarchy to locate exact child targets.
 - **Root-to-Child Asset Instantiation**: Resolved an architectural blindspot where the agent was restricted to editing the root node of Prefab Assets. It can now directly target nested children inside an unloaded prefab asset and apply structural modifications (`add_child`, `add_component`), properly serializing back to disk via `SaveAsPrefabAsset`.
 - **System Prompt Tool Parity**: Updated both `SYSTEM_PROMPT` and `SYSTEM_PROMPT_LITE` to explicitly document the `add_child` parameter and the new deep-path syntax (`.prefab/SubNode`). This closes the knowledge gap that was forcing the agent to instantiate scene objects when attempting to build deep hierarchies inside project assets.
+
+---
+
+## 32. Loop Circuit Breaker & Task Flushing (Phase 31)
+- **Deterministic Loop Detection**: Overhauled the loop circuit breaker in `AIOrchestrator.cs`. When the system detects the exact same tool signature executed 3 times consecutively (e.g., redundant "Verification OCD" inspections), it no longer halts the agent.
+- **Queue Interception**: Implemented a "Queue Flush" mechanism. Upon loop detection, the Orchestrator now physically clears the `_pendingTasks` queue to prevent the agent from burning tokens on redundant checklist items.
+- **System Intervention Nudge**: Injects a `[System Intervention]` message into the chat history, forcing the agent to stop speculating and immediately summarize the current state for the user. This ensures the UI remains responsive and the agent provides a graceful exit from a logical deadlock.
+
+---
+
+## 33. Recursive Array & List Support (Phase 32)
+- **SerializedProperty Array Traversal**: Implemented `ApplyToArrayProperty` in `UnityComponentHelper.cs`. The `set_component_property` tool now natively supports modifying C# Arrays and Lists (e.g., `Transform[]` or `List<GameObject>`).
+- **Comma-Separated Resolution**: The backend now intelligently parses comma-separated strings (e.g., `"waypoint_1, waypoint_2"`) provided by the agent. It automatically resizes the underlying Unity collection and resolves each object reference or primitive value using the existing type-safe pipeline.
+- **Complex Script Integration**: This resolves a major bottleneck where the agent could modify simple properties but struggled to populate data-heavy scripts like Patrol systems or Inventory lists, enabling full automation of complex game logic wiring.
+

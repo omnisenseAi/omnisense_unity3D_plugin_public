@@ -30,7 +30,15 @@ namespace Omnisense
 
             if (prop != null)
             {
-                if (ApplyToSerializedProperty(prop, value, out error))
+                if (prop.isArray && prop.propertyType != SerializedPropertyType.String)
+                {
+                    if (ApplyToArrayProperty(prop, value, out error))
+                    {
+                        so.ApplyModifiedProperties();
+                        return true;
+                    }
+                }
+                else if (ApplyToSerializedProperty(prop, value, out error))
                 {
                     so.ApplyModifiedProperties();
                     return true;
@@ -46,6 +54,38 @@ namespace Omnisense
 
             error = $"Property '{propertyName}' not found or could not be set on {comp.GetType().Name}.";
             return false;
+        }
+
+        private static bool ApplyToArrayProperty(SerializedProperty prop, string value, out string error)
+        {
+            error = string.Empty;
+            try
+            {
+                if (string.IsNullOrWhiteSpace(value) || value.Trim() == "[]")
+                {
+                    prop.arraySize = 0;
+                    return true;
+                }
+
+                string[] values = value.Split(new char[] { ',' }, StringSplitOptions.RemoveEmptyEntries);
+                prop.arraySize = values.Length;
+
+                for (int i = 0; i < values.Length; i++)
+                {
+                    SerializedProperty elementProp = prop.GetArrayElementAtIndex(i);
+                    if (!ApplyToSerializedProperty(elementProp, values[i].Trim(), out string elementError))
+                    {
+                        error = $"Error at index {i}: {elementError}";
+                        return false;
+                    }
+                }
+                return true;
+            }
+            catch (Exception e)
+            {
+                error = e.Message;
+                return false;
+            }
         }
 
         private static bool ApplyToSerializedProperty(SerializedProperty prop, string value, out string error)
@@ -79,9 +119,11 @@ namespace Omnisense
                         break;
                     case SerializedPropertyType.ObjectReference:
                         string targetPath = value.StartsWith("/") ? value.Substring(1) : value;
-                        GameObject targetObj = GameObject.Find(targetPath);
-                        UnityEngine.Object finalTarget = targetObj;
+                        
+                        // 1. Try SOTA deep path resolution for GameObjects/Prefabs
+                        UnityEngine.Object finalTarget = MCPToolRegistry.FindGameObjectOrPrefab(targetPath);
 
+                        // 2. If it's not a GameObject (e.g., Sprite, Material, ScriptableObject), fallback to standard AssetDatabase
                         if (finalTarget == null) 
                         {
                             finalTarget = AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(value);
