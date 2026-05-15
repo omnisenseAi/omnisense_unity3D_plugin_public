@@ -121,6 +121,9 @@ namespace Omnisense
             root.Q<Button>("btn-undo").clicked += () => OmnisenseUndoManager.PerformUndo();
             root.Q<Button>("btn-new-chat").clicked += () => {
                 _chatHistory.Clear();
+                AIOrchestrator.Instance.ClearHistory();
+                _currentSession = OmnisenseSessionManager.CreateNewSession();
+                EditorPrefs.SetString("Omnisense_LastSessionId", _currentSession.id);
                 var label = new Label("New session started.");
                 label.AddToClassList("system-message");
                 _chatHistory.Add(label);
@@ -232,11 +235,13 @@ namespace Omnisense
             if (restoredSession != null)
             {
                 LoadSession(restoredSession);
+                AIOrchestrator.Instance.SyncWithSession(restoredSession);
             }
             else
             {
                 _currentSession = OmnisenseSessionManager.CreateNewSession();
                 EditorPrefs.SetString("Omnisense_LastSessionId", _currentSession.id);
+                AIOrchestrator.Instance.ClearHistory();
             }
 
             // Initialize Model Selector
@@ -921,6 +926,9 @@ namespace Omnisense
             {
                 EditorApplication.delayCall += () => _chatHistory.ScrollTo(last);
             }
+
+            // Sync the AI's brain with the newly loaded session
+            AIOrchestrator.Instance.SyncWithSession(session);
         }
 
         private void OnDestroy()

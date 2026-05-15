@@ -1,10 +1,12 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.Networking;
+
 
 namespace Omnisense
 {
@@ -50,6 +52,8 @@ namespace Omnisense
         [Serializable]
         public class PlannerResponse
         {
+            public string intent;
+            public bool requires_tools;
             public List<string> tasks;
         }
 
@@ -58,11 +62,14 @@ namespace Omnisense
         private bool _isReflecting = false;
         private bool _isManagerEvaluating = false;
         private bool _isPlanning = false;
+        private bool _isConceptualTurn = false;
         private Queue<string> _pendingTasks = new Queue<string>();
         private string _currentTask = "";
         private int _stepCount = 0;
         private const int MAX_STEPS = 10;
         private List<string> _actionHistory = new List<string>();
+        private List<string> _turnContextLog = new List<string>();
+        private List<string> _persistentScratchpad = new List<string>();
 
         [Serializable]
         private class HistoryWrapper { public List<ChatMessage> list; }
@@ -77,6 +84,56 @@ namespace Omnisense
             var wrapper = new HistoryWrapper { list = _history };
             EditorPrefs.SetString("Omnisense_AI_History", JsonUtility.ToJson(wrapper));
             // Debug.Log($"[Omnisense] AI History saved ({_history.Count} messages).");
+        }
+
+        public void ClearHistory()
+        {
+            _history.Clear();
+            _pendingTasks.Clear();
+            _currentTask = "";
+            SaveHistory();
+            Debug.Log("[Omnisense] AI History cleared.");
+        }
+
+        public void SyncWithSession(ChatSession session)
+        {
+            if (session == null) { ClearHistory(); return; }
+            
+            _history.Clear();
+            _pendingTasks.Clear();
+            _currentTask = "";
+
+            // Initialize with correct System Prompt
+            string model = EditorPrefs.GetString("Omnisense_SelectedModel", "gpt-4o");
+            string promptToUse = model == "self-hosted" ? SYSTEM_PROMPT_LITE : SYSTEM_PROMPT;
+            _history.Add(new ChatMessage { role = "system", content = promptToUse });
+
+            // Re-bootstrap DNA
+            try {
+                string dnaPath = System.IO.Path.Combine(Application.dataPath, "..", ".omnisense_dna.md");
+                if (System.IO.File.Exists(dnaPath)) {
+                    string dnaContent = System.IO.File.ReadAllText(dnaPath);
+                    _history.Add(new ChatMessage { role = "system", content = $"[PROJECT DNA]\n{dnaContent}" });
+                }
+            } catch { }
+
+            // Map Session Messages (User/AI) to AIOrchestrator Messages (User/Assistant)
+            foreach (var msg in session.messages)
+            {
+                if (msg.sender == "User")
+                {
+                    // If it was a planner request, keep it wrapped if possible, 
+                    // but usually sessions store the raw text. 
+                    // For history restoration, we treat it as a standard user message.
+                    _history.Add(new ChatMessage { role = "user", content = msg.content });
+                }
+                else if (msg.sender == "AI")
+                {
+                    _history.Add(new ChatMessage { role = "assistant", content = msg.content });
+                }
+            }
+            SaveHistory();
+            Debug.Log($"[Omnisense] AI Brain synced with Session: {session.name} ({_history.Count} messages).");
         }
 
         private void LoadHistory()
@@ -177,48 +234,65 @@ Available Tools:
             _turnToolCount = 0;
             _isReflecting = false;
             _isManagerEvaluating = false;
+            _isPlanning = false;
+            _isConceptualTurn = false;
             _isAborted = false;
             _stepCount = 0;
             _actionHistory.Clear();
+            _turnContextLog.Clear();
             OmnisenseUndoManager.StartTurn(turnId);
+
+            // ─── STATE HANDOVER (SCRATCHPAD) ────────────────────────────────────────────────
+            // Instead of flushing the history, we maintain a persistent scratchpad
+            // and keep the history intact for the Tiered Sliding Window to manage.
+            string promptToUse = model == "self-hosted" ? SYSTEM_PROMPT_LITE : SYSTEM_PROMPT;
             
-            if (_history.Count == 0)
-            {
-                string promptToUse = model == "self-hosted" ? SYSTEM_PROMPT_LITE : SYSTEM_PROMPT;
-                Debug.Log("[Omnisense-Diagnostics] Initializing fresh context with SYSTEM_PROMPT.");
-                _history.Add(new ChatMessage { role = "system", content = promptToUse });
-                
-                // Load Project DNA if exists
-                try {
-                    string dnaPath = System.IO.Path.Combine(Application.dataPath, "..", ".omnisense_dna.md");
-                    if (System.IO.File.Exists(dnaPath)) {
-                        string dnaContent = System.IO.File.ReadAllText(dnaPath);
-                        _history.Add(new ChatMessage { role = "system", content = $"[PROJECT DNA]\nThis is the persistent memory of this project. Conform to these architectural rules:\n\n{dnaContent}" });
-                        Debug.Log($"[Omnisense-Diagnostics] Project DNA loaded ({dnaContent.Length} chars).");
-                    }
-                } catch { }
-            }
-            else
-            {
-                // Force-update the SYSTEM_PROMPT to ensure any newly compiled tools are available
-                string promptToUse = model == "self-hosted" ? SYSTEM_PROMPT_LITE : SYSTEM_PROMPT;
-                if (_history[0].role == "system" && !_history[0].content.StartsWith("[PROJECT DNA]"))
-                {
-                    Debug.Log("[Omnisense-Diagnostics] Force-updating SYSTEM_PROMPT in existing history to guarantee latest tool definitions.");
-                    _history[0].content = promptToUse;
+            // Clean up old system prompts and DNA to refresh them at the top
+            _history.RemoveAll(m => m.role == "system");
+
+            // Re-inject core system prompt
+            _history.Insert(0, new ChatMessage { role = "system", content = promptToUse });
+
+            // Re-inject Project DNA if it exists
+            try {
+                string dnaPath = System.IO.Path.Combine(Application.dataPath, "..", ".omnisense_dna.md");
+                if (System.IO.File.Exists(dnaPath)) {
+                    string dnaContent = System.IO.File.ReadAllText(dnaPath);
+                    _history.Insert(1, new ChatMessage { role = "system", content = $"[PROJECT DNA]\nThis is the persistent memory of this project. Conform to these architectural rules:\n\n{dnaContent}" });
+                    Debug.Log($"[Omnisense-Diagnostics] Project DNA loaded ({dnaContent.Length} chars).");
                 }
+            } catch { }
+
+            // Inject the State Scratchpad (derived from recent tool actions)
+            if (_persistentScratchpad.Count > 0)
+            {
+                string stateBanner = "[CURRENT ENVIRONMENT STATE]\n";
+                // Only take the last 15 unique files touched to prevent bloat
+                foreach (var item in _persistentScratchpad.Distinct().Reverse().Take(15).Reverse())
+                {
+                    stateBanner += $"- {item}\n";
+                }
+                _history.Insert(2, new ChatMessage { role = "system", content = stateBanner });
             }
+            
+            Debug.Log($"[Omnisense-Diagnostics] Context refreshed for new turn. History retained: {_history.Count} messages.");
+            // ─────────────────────────────────────────────────────────────────────────────
 
             // Route to Planner instead of executing directly
             _isPlanning = true;
             _pendingTasks.Clear();
 
-            _history.Add(new ChatMessage { role = "user", content = $"PLANNER REQUEST: You are the Planner Agent. Break down the user's request into a strict, chronological checklist of sub-tasks. Output ONLY a valid JSON array in this exact format: {{\"tasks\": [\"Task 1 description\", \"Task 2 description\"]}}. Do not execute any tools yet.\n\nUser Request: {prompt}" });
+            // Persistently add the user's prompt so the Worker and Manager can see the full context
+            _history.Add(new ChatMessage { role = "user", content = prompt });
+
+            // Temporarily append the Planner instructions
+            _history.Add(new ChatMessage { role = "user", content = $"PLANNER REQUEST: You are the Planner Agent. Classify the user's intent. If the user asks a general question, asks for architectural advice, or explicitly states 'this is a general question', you MUST classify the intent as 'conceptual_q_and_a' and set 'requires_tools' to false. Break down the user's request into a strict, chronological checklist of sub-tasks. Output ONLY a valid JSON object in this exact format: {{\"intent\": \"conceptual_q_and_a\", \"requires_tools\": false, \"tasks\": [\"Task 1 description\"]}}. Do not execute any tools yet." });
             SaveHistory();
 
-            onComplete?.Invoke("[System]: Analyzing request and creating execution plan...", false);
+            onComplete?.Invoke("[System]: Analyzing request and classifying intent...", false);
             ExecuteRequest(model, onComplete);
         }
+
 
         private void StartNextTask(string model, Action<string, bool> onComplete)
         {
@@ -637,10 +711,27 @@ Available Tools:
                     {
                         json = json.Substring(startIdx, endIdx - startIdx + 1);
                         var plan = JsonUtility.FromJson<PlannerResponse>(json);
-                        if (plan != null && plan.tasks != null) 
+                        if (plan != null) 
                         {
-                            foreach (var t in plan.tasks) _pendingTasks.Enqueue(t);
-                            Debug.Log($"[Omnisense-Orchestration] Plan Parsed Successfully: {_pendingTasks.Count} sub-tasks queued.");
+                            if (!plan.requires_tools && (plan.intent == "conceptual_q_and_a" || plan.intent == "general_knowledge"))
+                            {
+                                Debug.Log($"[Omnisense-Orchestration] Intent classified as conceptual. Bypassing tool loop.");
+                                _isConceptualTurn = true;
+                                _history.Add(new ChatMessage { role = "assistant", content = "<b>[Manager] Classified as General Knowledge. Bypassing tool execution.</b>" });
+                                SaveHistory();
+                                
+                                _history.Add(new ChatMessage { role = "user", content = "[System]: The user has asked a conceptual or general question. You do not need to use tools to answer this. Please answer the user directly and comprehensively in plain text. DO NOT output a tool block." });
+                                SaveHistory();
+                                
+                                onComplete?.Invoke("\n<b>[Manager] Classified as General Knowledge. Bypassing tool execution...</b>\n\n[System]: Generating response...", false);
+                                ExecuteRequest(model, onComplete);
+                                return;
+                            }
+                            else if (plan.tasks != null)
+                            {
+                                foreach (var t in plan.tasks) _pendingTasks.Enqueue(t);
+                                Debug.Log($"[Omnisense-Orchestration] Plan Parsed Successfully: {_pendingTasks.Count} sub-tasks queued.");
+                            }
                         }
                     }
                 } 
@@ -705,6 +796,23 @@ Available Tools:
                     PruneHistory();
                     
                     _history.Add(new ChatMessage { role = "assistant", content = $"<thought>Manager approved sub-task completion.</thought> {feedback}" });
+
+                    // ── CONTEXT CONDENSATION ──────────────────────────────────────────────────
+                    // Synthesize a Turn Summary from the tool context log and inject it as a
+                    // persistent system message. This survives the per-turn context flush,
+                    // preventing amnesia about file paths and objects touched in previous turns.
+                    if (_turnContextLog.Count > 0)
+                    {
+                        var sb = new StringBuilder();
+                        sb.AppendLine($"[Turn Summary] Task: '{_currentTask}'");
+                        sb.AppendLine("The agent successfully completed the following actions:");
+                        foreach (var entry in _turnContextLog.Distinct())
+                            sb.AppendLine($"  - {entry}");
+                        _history.Add(new ChatMessage { role = "system", content = sb.ToString().Trim() });
+                        Debug.Log($"[Omnisense] Context Condensation: Turn Summary injected ({_turnContextLog.Count} actions logged).");
+                    }
+                    // ─────────────────────────────────────────────────────────────────────────
+
                     SaveHistory();
                     
                     if (_pendingTasks.Count > 0)
@@ -782,13 +890,20 @@ Available Tools:
                 catch (Exception e)
                 {
                     Debug.LogError($"[Omnisense] Error parsing tool call: {e.Message}");
-                    _history.Add(new ChatMessage { role = "user", content = $"[Observation]\nError parsing tool call: {e.Message}" });
+                    _history.Add(new ChatMessage { role = "user", content = $"[System Error]\nFailed to parse tool request. Ensure your JSON is strictly formatted and enclosed in correct markdown blocks. Do NOT output multiple JSON blocks at once. Only one tool call is allowed per response.\nDetails: {e.Message}" });
                     SaveHistory();
                     ExecuteRequest(model, onComplete);
                 }
             }
             else
             {
+                if (_isConceptualTurn)
+                {
+                    Debug.Log("[Omnisense] Conceptual turn complete.");
+                    onComplete?.Invoke(response, true);
+                    return;
+                }
+
                 string extractedThought = ExtractThought(response);
                 string textWithoutThought = string.IsNullOrEmpty(extractedThought) ? response : response.Replace($"<thought>{extractedThought}</thought>", "").Trim();
                 
@@ -985,8 +1100,56 @@ Available Tools:
 
             string observation = result.success ? result.observation : $"Error: {result.error}";
             Debug.Log($"[Omnisense] Tool Result: {(result.success ? "Success" : "Failed")}. Observation added to history.");
+
+            // ── CONTEXT CONDENSATION: Log what was touched ────────────────────────────
+            if (result.success)
+            {
+                var q = toolCall.@params ?? new MCPToolParams();
+                string logEntry = null;
+                switch (toolCall.method)
+                {
+                    case "project/write_file":
+                        logEntry = $"Wrote file: '{q.path}'"; break;
+                    case "project/edit_file":
+                        logEntry = $"Edited file: '{q.path}'"; break;
+                    case "project/read_file":
+                        logEntry = $"Read file: '{q.path}'"; break;
+                    case "project/search_assets":
+                        logEntry = $"Searched assets for: '{q.query}'"; break;
+                    case "scene/instantiate_node":
+                        logEntry = $"Created GameObject: '{q.name}' (type: {q.type})"; break;
+                    case "scene/modify_node":
+                        logEntry = $"Modified node '{q.path}': set {q.property} = '{q.value}'"; break;
+                    case "scene/inspect_node":
+                        logEntry = $"Inspected node/prefab at path: '{q.path}'"; break;
+                    case "scene/inspect_component":
+                        logEntry = $"Inspected component '{q.component}' on: '{q.path}'"; break;
+                    case "scene/set_component_property":
+                        logEntry = $"Set '{q.component}.{q.property}' = '{q.value}' on: '{q.path}'"; break;
+                    case "project/create_prefab":
+                        logEntry = $"Created prefab: '{q.destinationAssetPath}' from '{q.path}'"; break;
+                    case "project/inspect_asset":
+                        logEntry = $"Inspected asset: '{q.path}'"; break;
+                }
+                if (logEntry != null)
+                {
+                    _turnContextLog.Add(logEntry);
+                    // Add to persistent scratchpad and prevent duplicates
+                    _persistentScratchpad.Remove(logEntry);
+                    _persistentScratchpad.Add(logEntry);
+                }
+            }
+            // ──────────────────────────────────────────────────────────────────────────
+
+            // Implement Tool Output Truncation before entering history
+            if (observation != null && observation.Length > 8000)
+            {
+                observation = observation.Substring(0, 8000) + "\n\n[System Warning]: Output was truncated due to length limits. If you need more information, use more specific search parameters or read a smaller chunk.";
+            }
+
             _history.Add(new ChatMessage { role = "user", content = $"[Observation]\n{observation}" });
             SaveHistory();
+
             
             if (toolCall.method != "project/write_file" && toolCall.method != "project/edit_file") {
                 onComplete?.Invoke(uiResponse + "\n\n[System]: Tool executed. Analyzing results...", false);
@@ -1042,17 +1205,29 @@ Available Tools:
 
         private string ExtractToolCall(string content)
         {
-            // 1. Try to match proper block WITH closing backticks
-            var match = Regex.Match(content, @"```(?:mcp_json|json)?\s*(\{.*?\})\s*```", RegexOptions.Singleline);
-            if (match.Success) return match.Groups[1].Value.Trim();
+            // First, try to extract from inside markdown blocks if present
+            var match = Regex.Match(content, @"```(?:mcp_json|json)?\s*(\{[\s\S]*?\})\s*```", RegexOptions.Singleline);
+            string searchArea = match.Success ? match.Groups[1].Value : content;
 
-            // 2. Try to match block WITHOUT closing backticks (e.g. if the LLM stopped generating early)
-            var matchNoClose = Regex.Match(content, @"```(?:mcp_json|json)?\s*(\{.*\})", RegexOptions.Singleline);
-            if (matchNoClose.Success) return matchNoClose.Groups[1].Value.Trim();
+            // Find the first '{' that has '"method"' inside the block
+            int methodIdx = searchArea.IndexOf("\"method\"");
+            if (methodIdx == -1) return null;
 
-            // 3. Fallback: try to match raw JSON without any markdown ticks at all
-            var fallback = Regex.Match(content, @"\{\s*""method"":\s*"".*?\}", RegexOptions.Singleline);
-            if (fallback.Success) return fallback.Value.Trim();
+            int startIdx = searchArea.LastIndexOf('{', methodIdx);
+            if (startIdx == -1) return null;
+
+            // Robust brace matching to extract exactly one balanced JSON object
+            int braceCount = 0;
+            for (int i = startIdx; i < searchArea.Length; i++)
+            {
+                if (searchArea[i] == '{') braceCount++;
+                else if (searchArea[i] == '}') braceCount--;
+
+                if (braceCount == 0)
+                {
+                    return searchArea.Substring(startIdx, i - startIdx + 1).Trim();
+                }
+            }
 
             return null;
         }
