@@ -285,8 +285,22 @@ Available Tools:
             // Persistently add the user's prompt so the Worker and Manager can see the full context
             _history.Add(new ChatMessage { role = "user", content = prompt });
 
+            string plannerInstruction = @"[SYSTEM PLANNER INSTRUCTION]
+Evaluate the intent of the user's latest request in the context of the conversation history.
+- If the user explicitly asks to CREATE, MODIFY, INSPECT, or DELETE files/scripts/objects, you MUST set 'requires_tools' to true and provide an execution plan.
+- If the user is ONLY asking a general question or asking for advice, set 'requires_tools' to false.
+- CRITICAL: If the user's request is a continuation (e.g., 'yes, please do', 'go ahead', 'do it'), read the previous assistant message. If they are approving the creation of files or execution of actions, 'requires_tools' MUST be true.
+
+Output ONLY a valid JSON object in this exact format:
+{
+  ""intent"": ""project_modification"",
+  ""requires_tools"": true,
+  ""tasks"": [""Task 1 description""]
+}
+Do NOT output any other text or execute any tools yet.";
+
             // Temporarily append the Planner instructions
-            _history.Add(new ChatMessage { role = "user", content = $"PLANNER REQUEST: You are the Planner Agent. Classify the user's intent. If the user asks a general question, asks for architectural advice, or explicitly states 'this is a general question', you MUST classify the intent as 'conceptual_q_and_a' and set 'requires_tools' to false. Break down the user's request into a strict, chronological checklist of sub-tasks. Output ONLY a valid JSON object in this exact format: {{\"intent\": \"conceptual_q_and_a\", \"requires_tools\": false, \"tasks\": [\"Task 1 description\"]}}. Do not execute any tools yet." });
+            _history.Add(new ChatMessage { role = "system", content = plannerInstruction });
             SaveHistory();
 
             onComplete?.Invoke("[System]: Analyzing request and classifying intent...", false);
@@ -697,7 +711,7 @@ Available Tools:
                 _isPlanning = false;
                 
                 // Remove the Planner prompt to keep history clean for the worker
-                if (_history.Count > 0 && _history[_history.Count - 1].content.StartsWith("PLANNER REQUEST:"))
+                if (_history.Count > 0 && _history[_history.Count - 1].content.StartsWith("[SYSTEM PLANNER INSTRUCTION]"))
                 {
                     _history.RemoveAt(_history.Count - 1);
                 }
