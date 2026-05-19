@@ -66,7 +66,7 @@ namespace Omnisense
         private Queue<string> _pendingTasks = new Queue<string>();
         private string _currentTask = "";
         private int _stepCount = 0;
-        private const int MAX_STEPS = 10;
+        private const int MAX_STEPS = 25;
         private List<string> _actionHistory = new List<string>();
         private List<string> _turnContextLog = new List<string>();
         private List<string> _persistentScratchpad = new List<string>();
@@ -926,12 +926,24 @@ Do NOT output any other text or execute any tools yet.";
 
                 if (isPhantomTurn)
                 {
-                    Debug.Log("[Omnisense] Phantom turn detected. Nudging the model...");
-                    _history.Add(new ChatMessage { role = "user", content = "[System]\nYou created a plan but did not execute a tool. Please execute your plan by outputting a valid ```mcp_json tool block in your very next response. NEVER stop generating." });
-                    SaveHistory();
-                    string nudgeUiResponse = !string.IsNullOrEmpty(extractedThought) ? $"<thought>{extractedThought}</thought>\n\n[System]: Nudging agent to execute plan..." : "[System]: Nudging agent to execute plan...";
-                    onComplete?.Invoke(nudgeUiResponse, false);
-                    ExecuteRequest(model, onComplete);
+                    if (_isReflecting)
+                    {
+                        Debug.Log("[Omnisense] Phantom turn during reflection. Nudging model to finalize.");
+                        _history.Add(new ChatMessage { role = "user", content = "[System]\nYou output a thought block but no summary or tool call. If you are finished, you MUST summarize your work to the user in plain text. If you need to fix something, output a valid ```mcp_json tool block. NEVER stop generating without providing a tool or a summary." });
+                        SaveHistory();
+                        string nudgeUiResponse = !string.IsNullOrEmpty(extractedThought) ? $"<thought>{extractedThought}</thought>\n\n[System]: Nudging agent to finalize reflection..." : "[System]: Nudging agent to finalize reflection...";
+                        onComplete?.Invoke(nudgeUiResponse, false);
+                        ExecuteRequest(model, onComplete);
+                    }
+                    else
+                    {
+                        Debug.Log("[Omnisense] Phantom turn detected. Nudging the model...");
+                        _history.Add(new ChatMessage { role = "user", content = "[System]\nYou created a plan but did not execute a tool. Please execute your plan by outputting a valid ```mcp_json tool block in your very next response. NEVER stop generating." });
+                        SaveHistory();
+                        string nudgeUiResponse = !string.IsNullOrEmpty(extractedThought) ? $"<thought>{extractedThought}</thought>\n\n[System]: Nudging agent to execute plan..." : "[System]: Nudging agent to execute plan...";
+                        onComplete?.Invoke(nudgeUiResponse, false);
+                        ExecuteRequest(model, onComplete);
+                    }
                 }
                 else if (_turnToolCount > 0 && !_isReflecting)
                 {
@@ -985,22 +997,23 @@ Do NOT output any other text or execute any tools yet.";
             // This stops the Assistant's own massive code writes from bloating the context window.
             for (int i = 0; i < _history.Count; i++)
             {
-                // Never prune System prompts or the most recent 6 messages (for conversational coherence)
-                if (_history[i].role == "system" || i > _history.Count - 6) continue;
+                // Never prune System prompts or the most recent 12 messages (for conversational coherence)
+                if (_history[i].role == "system" || i > _history.Count - 12) continue;
 
-                if (_history[i].content.Length > 500)
+                if (_history[i].role == "user" && _history[i].content.Length > 500)
                 {
                     // Prune User Observations (Reads)
-                    if (_history[i].role == "user" && _history[i].content.StartsWith("[Observation]"))
+                    if (_history[i].content.StartsWith("[Observation]"))
                     {
                         _history[i].content = "[Observation]\n(Output truncated to preserve context window).";
                     }
+                }
+                else if (_history[i].role == "assistant" && _history[i].content.Length > 3000)
+                {
                     // Prune Assistant Content (Writes) - CRITICAL for tool discovery
-                    else if (_history[i].role == "assistant")
-                    {
-                        string snippet = _history[i].content.Substring(0, 300);
-                        _history[i].content = $"{snippet}...\n\n(Previous large output/code truncated to prevent context saturation).";
-                    }
+                    // We allow up to 3000 characters to preserve the Assistant's Semantic Memory (notes, findings, etc.)
+                    string snippet = _history[i].content.Substring(0, 3000);
+                    _history[i].content = $"{snippet}...\n\n(Previous large output/code truncated to prevent context saturation).";
                 }
             }
             // Debug.Log("[Omnisense] Context optimized for tool discovery.");

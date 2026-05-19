@@ -250,6 +250,17 @@ The agent's "hands" have been specifically tuned for the Unity Editor environmen
 
 ---
 
+## 32. Orchestrator Collision & Loop Prevention (Phase 32)
+- **Context-Aware Phantom Turn Detection**: Fixed a major collision between the `Proactive Reflection` and `Phantom Turn` systems. Previously, if the agent output a solitary `<thought>` block during an audit phase, the Orchestrator would aggressively force it to use a tool, triggering a panic spin (hitting the 10-turn limit). 
+- **Graceful Audit Finalization**: The Phantom Turn detector now checks if the agent is in a `_isReflecting` state. If true, it gently nudges the agent to summarize its findings in plain text, rather than coercing it to execute unneeded tasks. This restores the agent's ability to cleanly exit the ReAct loop after verifying its work.
+
+---
+
+## 33. Semantic Memory Preservation (Phase 33)
+- **Context Pruning Optimization**: Fixed a severe "Semantic Amnesia" issue where the orchestrator was aggressively truncating the Worker's `<thought>` blocks and text outputs (to 300 characters) if they were older than 6 messages. 
+- **Expanded Working Memory**: The safe zone for conversational coherence has been doubled (from 6 to 12 messages), and the Assistant's content truncation limit has been expanded to 3000 characters. This ensures the agent does not lose critical architectural findings (like multiple classes defined in a single file) during deep tool loops, fundamentally fixing the Manager's blindspots during evaluation.
+---
+
 ## 32. Loop Circuit Breaker & Task Flushing (Phase 31)
 - **Deterministic Loop Detection**: Overhauled the loop circuit breaker in `AIOrchestrator.cs`. When the system detects the exact same tool signature executed 3 times consecutively (e.g., redundant "Verification OCD" inspections), it no longer halts the agent.
 - **Queue Interception**: Implemented a "Queue Flush" mechanism. Upon loop detection, the Orchestrator now physically clears the `_pendingTasks` queue to prevent the agent from burning tokens on redundant checklist items.
@@ -268,3 +279,9 @@ The agent's "hands" have been specifically tuned for the Unity Editor environmen
 - **Prefab-Aware Component Editing**: Refactored `SetComponentProperty` in `MCPToolRegistry.cs` to use the `LoadPrefabContents`/`SaveAsPrefabAsset` cycle. This ensures that modifications to script properties on project assets are actually committed to disk, resolving the "silent failure" where changes were lost on reload.
 - **Unified Deep-Path Resolution**: Integrated `FindGameObjectOrPrefab` into the `ObjectReference` resolution pipeline in `UnityComponentHelper.cs`. This allows the agent to assign nested prefab children (e.g., `Assets/Prefab/Enemy.prefab/Waypoints/waypoint_1`) directly to script fields and arrays.
 - **Tool Schema Enforcement**: Hardened the `SYSTEM_PROMPT` by explicitly documenting the comma-separated array assignment syntax. This prevents the LLM from attempting to use Unity's internal `.Array.size` or `.Array.data[i]` notation, which are not supported by the reflection-based backend.
+
+---
+
+## 35. Global Execution Gas Limit (Phase 34)
+- **High-Capacity Action Limit**: Increased the `MAX_STEPS` global circuit breaker from 10 to 25. This ensures that the Multi-Agent system has enough "cognitive gas" in the tank to execute highly complex, multi-stage task plans that span multiple files, assets, and hierarchy layers, without being prematurely halted.
+- **Multi-Agent Graceful Retries**: This is particularly critical in systems using the Manager Evaluator where active rejections occur (e.g. self-correcting missing steps), as these retries consume execution steps. The increased step count gives the Worker ample room to self-correct and complete the long-horizon goal.
