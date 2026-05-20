@@ -285,3 +285,20 @@ The agent's "hands" have been specifically tuned for the Unity Editor environmen
 ## 35. Global Execution Gas Limit (Phase 34)
 - **High-Capacity Action Limit**: Increased the `MAX_STEPS` global circuit breaker from 10 to 25. This ensures that the Multi-Agent system has enough "cognitive gas" in the tank to execute highly complex, multi-stage task plans that span multiple files, assets, and hierarchy layers, without being prematurely halted.
 - **Multi-Agent Graceful Retries**: This is particularly critical in systems using the Manager Evaluator where active rejections occur (e.g. self-correcting missing steps), as these retries consume execution steps. The increased step count gives the Worker ample room to self-correct and complete the long-horizon goal.
+- **Dynamic Warning Interpolation**: Fixed a mismatch between the active limit (25) and the warning prompt (which previously hardcoded "10"). The circuit breaker message now dynamically pulls from `MAX_STEPS` to prevent user confusion.
+
+---
+
+## 36. SOTA Agent Reliability Overdrive (Phase 35)
+- **SOTA UI & Database Message Consolidation**: Modern developer agents (like Cursor and Claude Code) avoid history pollution by updating intermediate thoughts and tool results in-place rather than appending countless redundant progress messages. Implemented an identical "In-Place Consolidation" system in `OmnisenseWindow.cs` (UI and session database) where any progress update or tool observation matching a `turnId` and `sender` is overwritten/merged. This prevents context window bloating and ensures that when assembly reloads occur, the history is restored in a clean, high-fidelity, and consolidated format.
+- **Action-Oriented Audit Rejection Guard**: Replaced the passive "SYSTEM OVERRIDE: Do not write code... verify via reading first" logic with a highly proactive "SYSTEM DIRECTIVE: Review feedback and write script edits immediately" prompt. This directly breaks the infinite "verification loops" or "death spirals" where the Worker agent gets stuck repeatedly reading unchanged scripts and the Manager repeatedly rejects. The agent is now directed to edit immediately, ensuring swift progress.
+
+---
+
+## 37. Complete Orchestrator State Serialization & UI Trace Persistence (Phase 36)
+- **Assembly Reload State Preservation**: Solved the "vanishing worker text" and "goldfish memory" bugs by serializing the complete active execution loop variables (`_lastWorkerResponse`, `_isManagerEvaluating`, `_pendingTasks`, etc.) into `EditorPrefs` using an `OrchestratorState` wrapper in `AIOrchestrator.cs`. 
+- **Auto-State Reconstruction**: Integrated `LoadState()` into `LoadHistory()` to automatically restore all in-flight variables and worker responses whenever an assembly reload forces a static reconstruction of the singleton `AIOrchestrator.Instance`.
+- **UI Trace Persistence**: Overhauled `ResumeAIProcess` in `OmnisenseWindow.cs` to query the current session's database for existing turn messages. It restores `_currentTurnAIContent` from the serialized database record before resuming, preventing pre-reload technical execution traces from vanishing.
+- **Smarter Trace Foldout Visibility**: Changed the visual `Foldout` rendering logic in `CreateMessageElement` to only show the collapsible trace when `fullContent` differs from standard `content`. This prevents redundant technical foldouts from spamming the interface when the user is asking conceptual or general questions.
+- **Premium Colored Manager Audits**: Styled Manager Audit logs using Unity rich-text `<color>` tags. Success states (`[Manager Approved]`, `[Manager Approved Sub-Task]`) are rendered in vibrant green (`#00FF00`), while failures/rejections (`[Manager Rejected]`) are highlighted in premium red (`#FF5555`) to provide immediate, eye-catching visual feedback.
+

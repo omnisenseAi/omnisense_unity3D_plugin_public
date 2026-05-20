@@ -13,6 +13,7 @@ namespace Omnisense
         public string content;
         public string timestamp;
         public string turnId; // Added to map user prompts to file-backup turns
+        public string fullContent; // Stores the complete accumulated turn trace (collapsible technical details)
     }
 
     [Serializable]

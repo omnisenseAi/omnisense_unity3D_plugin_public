@@ -289,7 +289,19 @@ namespace Omnisense
             SafeScrollTo(_loadingIndicator);
             EditorApplication.update += UpdateSpinner;
             ToggleStopButton(true);
+
+            // Attempt to restore _currentTurnAIContent from existing session message
             _currentTurnAIContent = "";
+            string currentTurnId = OmnisenseUndoManager.CurrentTurnId;
+            if (_currentSession != null && !string.IsNullOrEmpty(currentTurnId))
+            {
+                var existingMsg = _currentSession.messages.FindLast(m => m.turnId == currentTurnId && m.sender == "AI");
+                if (existingMsg != null && !string.IsNullOrEmpty(existingMsg.fullContent))
+                {
+                    _currentTurnAIContent = existingMsg.fullContent;
+                    Debug.Log($"[Omnisense] Restored AI trace content ({_currentTurnAIContent.Length} chars) from session message.");
+                }
+            }
 
             AIOrchestrator.Instance.Resume(model, (response, isFinal) => {
                 if (isFinal) ToggleStopButton(false);
@@ -301,9 +313,7 @@ namespace Omnisense
                 }
                 
                 _currentTurnAIContent += response + "\n\n";
-                // When resuming, we might not have the original turnId easily, so we can try to grab it from the UndoManager
-                string currentTurnId = OmnisenseUndoManager.CurrentTurnId;
-                AddMessageToChat("AI", response, isFinal, currentTurnId);
+                AddMessageToChat("AI", response, isFinal, currentTurnId, _currentTurnAIContent);
                 if (isFinal) Debug.Log("[Omnisense] Auto-Resume completed successfully.");
             });
         }
@@ -559,7 +569,7 @@ namespace Omnisense
                 }
                 
                 _currentTurnAIContent += response + "\n\n";
-                AddMessageToChat("AI", response, isFinal, turnId);
+                AddMessageToChat("AI", response, isFinal, turnId, _currentTurnAIContent);
             });
         }
 
@@ -712,26 +722,68 @@ namespace Omnisense
             }
         }
 
-        public void AddMessageToChat(string sender, string content, bool showCopyButton = false, string turnId = "")
+        public void AddMessageToChat(string sender, string content, bool showCopyButton = false, string turnId = "", string fullContent = "")
         {
             Debug.Log($"[Omnisense] Adding message from {sender} to chat UI. CopyButton: {showCopyButton}");
-            var msgContainer = CreateMessageElement(sender, content, showCopyButton, turnId);
-            _chatHistory.Add(msgContainer);
+            
+            // SOTA UI Consolidation: Check if there is an existing message visual element for the same turn and sender (to overwrite intermediate messages)
+            VisualElement msgContainer = null;
+            if (!string.IsNullOrEmpty(turnId) && sender == "AI")
+            {
+                foreach (var child in _chatHistory.Children())
+                {
+                    if (child.userData is string key && key == $"{turnId}_{sender}")
+                    {
+                        msgContainer = child;
+                        break;
+                    }
+                }
+            }
+
+            var newMsgContainer = CreateMessageElement(sender, content, showCopyButton, turnId, fullContent);
+            newMsgContainer.userData = $"{turnId}_{sender}";
+
+            if (msgContainer != null)
+            {
+                // Replace the old message container with the new updated one in the UI visual tree
+                int index = _chatHistory.IndexOf(msgContainer);
+                if (index >= 0)
+                {
+                    _chatHistory.RemoveAt(index);
+                    _chatHistory.Insert(index, newMsgContainer);
+                }
+            }
+            else
+            {
+                _chatHistory.Add(newMsgContainer);
+            }
 
             // Save to current session
             if (_currentSession != null)
             {
-                _currentSession.messages.Add(new ChatMessage { 
-                    sender = sender, 
-                    content = content, 
-                    timestamp = DateTime.Now.ToString("HH:mm:ss"),
-                    turnId = turnId
-                });
+                // SOTA Database Consolidation: Update existing message in the session if it shares the same turnId and sender
+                var existingMsg = _currentSession.messages.FindLast(m => m.turnId == turnId && m.sender == sender);
+                if (existingMsg != null)
+                {
+                    existingMsg.content = content;
+                    existingMsg.fullContent = fullContent;
+                    existingMsg.timestamp = DateTime.Now.ToString("HH:mm:ss");
+                }
+                else
+                {
+                    _currentSession.messages.Add(new ChatMessage { 
+                        sender = sender, 
+                        content = content, 
+                        timestamp = DateTime.Now.ToString("HH:mm:ss"),
+                        turnId = turnId,
+                        fullContent = fullContent
+                    });
+                }
                 OmnisenseSessionManager.SaveSession(_currentSession);
             }
             
             // Auto-scroll
-            SafeScrollTo(msgContainer);
+            SafeScrollTo(newMsgContainer);
         }
 
         private void SafeScrollTo(VisualElement target)
@@ -745,7 +797,7 @@ namespace Omnisense
             };
         }
 
-        private VisualElement CreateMessageElement(string sender, string content, bool showCopyButton = false, string turnId = "")
+        private VisualElement CreateMessageElement(string sender, string content, bool showCopyButton = false, string turnId = "", string fullContent = "")
         {
             var msgContainer = new VisualElement();
             msgContainer.AddToClassList("message-container");
@@ -808,6 +860,20 @@ namespace Omnisense
                 msgContainer.Add(textField);
             }
 
+            if (sender == "AI" && !string.IsNullOrEmpty(fullContent) && fullContent.Trim() != content.Trim())
+            {
+                var foldout = new Foldout { text = "📁 View Full Technical Execution Trace", value = false };
+                foldout.style.marginTop = 10;
+                foldout.style.borderTopWidth = 1;
+                foldout.style.borderTopColor = new Color(0.3f, 0.3f, 0.3f, 0.5f);
+                foldout.style.paddingTop = 5;
+
+                var traceText = new TextField { value = fullContent, isReadOnly = true, multiline = true };
+                traceText.AddToClassList("selectable-message-text");
+                foldout.Add(traceText);
+                msgContainer.Add(foldout);
+            }
+
             // Append Undo button for User messages (representing the start of a turn)
             if (sender == "User" && !string.IsNullOrEmpty(turnId))
             {
@@ -833,7 +899,7 @@ namespace Omnisense
                 footer.style.justifyContent = Justify.FlexEnd;
                 footer.style.marginTop = 5;
 
-                string copyText = (sender == "User") ? content : _currentTurnAIContent;
+                string copyText = (sender == "User") ? content : (!string.IsNullOrEmpty(fullContent) ? fullContent : _currentTurnAIContent);
                 string btnText = (sender == "User") ? "Copy" : "Copy Full Response";
                 
                 var btnCopy = new Button(() => {
@@ -918,7 +984,7 @@ namespace Omnisense
                     }
                 }
 
-                last = CreateMessageElement(msg.sender, msg.content, showCopy, msg.turnId);
+                last = CreateMessageElement(msg.sender, msg.content, showCopy, msg.turnId, msg.fullContent);
                 _chatHistory.Add(last);
             }
 

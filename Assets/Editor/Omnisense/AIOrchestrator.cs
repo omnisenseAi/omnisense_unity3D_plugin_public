@@ -70,9 +70,78 @@ namespace Omnisense
         private List<string> _actionHistory = new List<string>();
         private List<string> _turnContextLog = new List<string>();
         private List<string> _persistentScratchpad = new List<string>();
+        private string _lastWorkerResponse = "";
 
         [Serializable]
         private class HistoryWrapper { public List<ChatMessage> list; }
+
+        [Serializable]
+        private class OrchestratorState
+        {
+            public bool isReflecting;
+            public bool isManagerEvaluating;
+            public bool isPlanning;
+            public bool isConceptualTurn;
+            public List<string> pendingTasks;
+            public string currentTask;
+            public int stepCount;
+            public int turnToolCount;
+            public string lastWorkerResponse;
+            public List<string> actionHistory;
+            public List<string> turnContextLog;
+            public List<string> persistentScratchpad;
+        }
+
+        private void SaveState()
+        {
+            var state = new OrchestratorState
+            {
+                isReflecting = _isReflecting,
+                isManagerEvaluating = _isManagerEvaluating,
+                isPlanning = _isPlanning,
+                isConceptualTurn = _isConceptualTurn,
+                pendingTasks = _pendingTasks.ToList(),
+                currentTask = _currentTask,
+                stepCount = _stepCount,
+                turnToolCount = _turnToolCount,
+                lastWorkerResponse = _lastWorkerResponse,
+                actionHistory = _actionHistory,
+                turnContextLog = _turnContextLog,
+                persistentScratchpad = _persistentScratchpad
+            };
+            EditorPrefs.SetString("Omnisense_AI_State", JsonUtility.ToJson(state));
+        }
+
+        private void LoadState()
+        {
+            string json = EditorPrefs.GetString("Omnisense_AI_State", "");
+            if (!string.IsNullOrEmpty(json))
+            {
+                try
+                {
+                    var state = JsonUtility.FromJson<OrchestratorState>(json);
+                    if (state != null)
+                    {
+                        _isReflecting = state.isReflecting;
+                        _isManagerEvaluating = state.isManagerEvaluating;
+                        _isPlanning = state.isPlanning;
+                        _isConceptualTurn = state.isConceptualTurn;
+                        _pendingTasks = new Queue<string>(state.pendingTasks ?? new List<string>());
+                        _currentTask = state.currentTask ?? "";
+                        _stepCount = state.stepCount;
+                        _turnToolCount = state.turnToolCount;
+                        _lastWorkerResponse = state.lastWorkerResponse ?? "";
+                        _actionHistory = state.actionHistory ?? new List<string>();
+                        _turnContextLog = state.turnContextLog ?? new List<string>();
+                        _persistentScratchpad = state.persistentScratchpad ?? new List<string>();
+                    }
+                }
+                catch (Exception e)
+                {
+                    Debug.LogWarning($"[Omnisense] Failed to deserialize Orchestrator State: {e.Message}");
+                }
+            }
+        }
 
         public AIOrchestrator()
         {
@@ -83,7 +152,7 @@ namespace Omnisense
         {
             var wrapper = new HistoryWrapper { list = _history };
             EditorPrefs.SetString("Omnisense_AI_History", JsonUtility.ToJson(wrapper));
-            // Debug.Log($"[Omnisense] AI History saved ({_history.Count} messages).");
+            SaveState();
         }
 
         public void ClearHistory()
@@ -91,6 +160,16 @@ namespace Omnisense
             _history.Clear();
             _pendingTasks.Clear();
             _currentTask = "";
+            _lastWorkerResponse = "";
+            _isReflecting = false;
+            _isManagerEvaluating = false;
+            _isPlanning = false;
+            _isConceptualTurn = false;
+            _stepCount = 0;
+            _turnToolCount = 0;
+            _actionHistory.Clear();
+            _turnContextLog.Clear();
+            _persistentScratchpad.Clear();
             SaveHistory();
             Debug.Log("[Omnisense] AI History cleared.");
         }
@@ -102,6 +181,16 @@ namespace Omnisense
             _history.Clear();
             _pendingTasks.Clear();
             _currentTask = "";
+            _lastWorkerResponse = "";
+            _isReflecting = false;
+            _isManagerEvaluating = false;
+            _isPlanning = false;
+            _isConceptualTurn = false;
+            _stepCount = 0;
+            _turnToolCount = 0;
+            _actionHistory.Clear();
+            _turnContextLog.Clear();
+            _persistentScratchpad.Clear();
 
             // Initialize with correct System Prompt
             string model = EditorPrefs.GetString("Omnisense_SelectedModel", "gpt-4o");
@@ -147,6 +236,7 @@ namespace Omnisense
                     Debug.Log($"[Omnisense] AI History restored ({_history.Count} messages) from persistent storage.");
                 }
             }
+            LoadState();
         }
 
         private const string SYSTEM_PROMPT = @"You are the Omnisense Senior Unity Architect, an elite autonomous developer agent. 
@@ -240,6 +330,7 @@ Available Tools:
             _stepCount = 0;
             _actionHistory.Clear();
             _turnContextLog.Clear();
+            _lastWorkerResponse = "";
             OmnisenseUndoManager.StartTurn(turnId);
 
             // ─── STATE HANDOVER (SCRATCHPAD) ────────────────────────────────────────────────
@@ -832,22 +923,30 @@ Do NOT output any other text or execute any tools yet.";
                     if (_pendingTasks.Count > 0)
                     {
                         Debug.Log($"[Omnisense-Orchestration] Moving to next sub-task. ({_pendingTasks.Count} remaining)");
-                        onComplete?.Invoke($"[Manager Approved]: {feedback}", false);
+                        string subTaskResult = !string.IsNullOrEmpty(_lastWorkerResponse) 
+                            ? $"{_lastWorkerResponse}\n\n<color=#00FF00><b>[Manager Approved Sub-Task]:</b></color> {feedback}" 
+                            : $"<color=#00FF00><b>[Manager Approved Sub-Task]:</b></color> {feedback}";
+                        
+                        onComplete?.Invoke(subTaskResult, false);
                         StartNextTask(model, onComplete);
                     }
                     else
                     {
                         Debug.Log("[Omnisense-Orchestration] All tasks approved. Loop terminating.");
-                        onComplete?.Invoke($"[Manager Approved]: All tasks complete.\n{feedback}", true);
+                        string finalResult = !string.IsNullOrEmpty(_lastWorkerResponse) 
+                            ? $"{_lastWorkerResponse}\n\n<color=#00FF00><b>[Manager Approved]: All tasks complete.</b></color>\n{feedback}" 
+                            : $"<color=#00FF00><b>[Manager Approved]: All tasks complete.</b></color>\n{feedback}";
+                        
+                        onComplete?.Invoke(finalResult, true);
                     }
                 }
                 else
                 {
                     Debug.Log($"[Omnisense-Orchestration] Manager REJECTED Completion. Feedback: {feedback}");
-                    _history.Add(new ChatMessage { role = "user", content = $"[Manager Audit Failed]: The Manager detected that the task is incomplete. Feedback: {feedback}\n\nSYSTEM OVERRIDE: Do not immediately rewrite code or retry the action. First, use your read/inspect tools to explicitly verify if the Manager's rejection is factually accurate based on the current project state." });
+                    _history.Add(new ChatMessage { role = "user", content = $"[Manager Audit Failed]: The Manager detected that the task is incomplete. Feedback: {feedback}\n\nSYSTEM DIRECTIVE: Review the feedback above, plan how to resolve the missing requirements, and immediately use your edit/write tools to apply the changes to the scripts. Do not stop at reading or verifying; you must write the required code edits to complete the sub-task." });
                     SaveHistory();
                     
-                    onComplete?.Invoke($"[Manager Rejected]: {feedback}\nResuming execution...", false);
+                    onComplete?.Invoke($"<color=#FF5555><b>[Manager Rejected]:</b></color> {feedback}\nResuming execution...", false);
                     ExecuteRequest(model, onComplete);
                 }
                 
@@ -958,6 +1057,7 @@ Do NOT output any other text or execute any tools yet.";
                 {
                     Debug.Log("[Omnisense] Worker thinks it is done. Triggering Manager Evaluator...");
                     _isManagerEvaluating = true;
+                    _lastWorkerResponse = response;
                     
                     _history.Add(new ChatMessage { role = "user", content = $"MANAGER AUDIT: You are the Manager Agent. Review the chat history and evaluate the Worker's execution of the CURRENT SUB-TASK: '{_currentTask}'. Did the worker successfully complete this specific sub-task? Do NOT evaluate against the entire user request, ONLY evaluate if this specific sub-task is done. Do not be overly pedantic about terminology. If the worker provides tool output (such as InspectNode) that reasonably shows the requested change exists, approve the task. Remember that Unity Prefab Assets are often displayed as 'GameObjects' or '[Prefab Asset]' in tool outputs. Output ONLY valid JSON in this exact format: {{\"is_complete\": true/false, \"feedback\": \"If false, list exactly what is missing from THIS sub-task. If true, summarize the success.\"}}" });
                     SaveHistory();
@@ -1045,7 +1145,7 @@ Do NOT output any other text or execute any tools yet.";
             _stepCount++;
             if (_stepCount > MAX_STEPS)
             {
-                string limitMsg = "\n\n[System Warning]: Maximum tool iterations (10) reached for this turn. To prevent an infinite loop, I have paused execution. Please review my progress and provide further instructions.";
+                string limitMsg = $"\n\n[System Warning]: Maximum tool iterations ({MAX_STEPS}) reached for this turn. To prevent an infinite loop, I have paused execution. Please review my progress and provide further instructions.";
                 onComplete?.Invoke(uiResponse + limitMsg, true);
                 _history.Add(new ChatMessage { role = "assistant", content = "I have reached my tool execution limit for this turn. Pausing for user feedback." });
                 SaveHistory();
