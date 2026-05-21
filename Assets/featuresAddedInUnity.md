@@ -302,3 +302,22 @@ The agent's "hands" have been specifically tuned for the Unity Editor environmen
 - **Smarter Trace Foldout Visibility**: Changed the visual `Foldout` rendering logic in `CreateMessageElement` to only show the collapsible trace when `fullContent` differs from standard `content`. This prevents redundant technical foldouts from spamming the interface when the user is asking conceptual or general questions.
 - **Premium Colored Manager Audits**: Styled Manager Audit logs using Unity rich-text `<color>` tags. Success states (`[Manager Approved]`, `[Manager Approved Sub-Task]`) are rendered in vibrant green (`#00FF00`), while failures/rejections (`[Manager Rejected]`) are highlighted in premium red (`#FF5555`) to provide immediate, eye-catching visual feedback.
 
+---
+
+## 38. Robust Hierarchical Technical Trace Copying (Phase 37)
+- **Dynamic Click-Time Resolution Callback**: Replaced the static, creation-time copy-text binding in `OmnisenseWindow.cs` with a dynamic multi-tiered resolution callback inside the `btnCopy` click listener. This guarantees that copying retrieves the most up-to-date, live in-flight content rather than capturing static, pre-execution states.
+- **Hierarchical Fallback Pipeline**: Developed a multi-tiered pipeline inside the copy callback that dynamically:
+  1. Queries the passed `fullContent` closure.
+  2. Falls back to the orchestrator's live `_currentTurnAIContent` in-flight memory.
+  3. Traverses the UI visual tree at click-time using UXML Queries (`Q<Foldout>` and `Q<TextField>`) to extract the exact trace from the Foldout element.
+  4. Cascades to the visible message summary (`content`) as an ultimate fallback if no trace exists.
+- **Deep Historical Trace Recovery**: Overhauled `LoadSession` to parse and build the copy buffer `_currentTurnAIContent` from the serialized `fullContent` database records instead of just concatenating message summaries (`content`), enabling complete historical trace extraction.
+
+---
+
+## 39. Pictograph Summary Copy Button with Interactive Feedback (Phase 38)
+- **Granular Summary Isolation**: Implemented a standalone pictograph copy button (`📋`) nested inside the AI response bubble. This button is placed directly below the final generated summary text and above the collapsible technical execution trace. It isolates and copies *only* the user-facing summary text to the system clipboard, completely bypassing the detailed trace data.
+- **Dynamic Micro-Interaction**: Integrated real-time interactive feedback. Upon clicking, the pictograph icon instantly transitions from a clipboard symbol (`📋`) to a checkmark (`✓`) to provide visual confirmation of a successful copy, dynamically scheduling a restore back to `📋` after 1.5 seconds via the UI Toolkit scheduler.
+- **Seamless Interface Layout**: Styled the button with high-contrast hover indicators and custom alignment parameters (`align-self: flex-end`) in `OmnisenseWindow.uss`. This creates a polished, premium aesthetic that blends naturally with the existing chat bubbles and preserves the overall clean visual hierarchy.
+
+

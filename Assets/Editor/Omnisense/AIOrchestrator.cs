@@ -409,6 +409,7 @@ Do NOT output any other text or execute any tools yet.";
             }
 
             _currentTask = _pendingTasks.Dequeue();
+            _stepCount = 0; // Reset step count budget for the new sub-task
             Debug.Log($"[Omnisense-Orchestration] Starting Sub-Task: {_currentTask}");
             _history.Add(new ChatMessage { role = "user", content = $"[Sub-Task]: {_currentTask}\n\nPlease execute this step using your MCP tools. If you are finished with this sub-task, summarize your work." });
             SaveHistory();
@@ -1276,6 +1277,7 @@ Do NOT output any other text or execute any tools yet.";
 
             _history.Add(new ChatMessage { role = "user", content = $"[Observation]\n{observation}" });
             SaveHistory();
+            onComplete?.Invoke($"[Observation]\n{observation}", false);
 
             
             if (toolCall.method != "project/write_file" && toolCall.method != "project/edit_file") {

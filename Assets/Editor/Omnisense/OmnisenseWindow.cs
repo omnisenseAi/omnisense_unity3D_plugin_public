@@ -858,6 +858,24 @@ namespace Omnisense
                 var textField = new TextField { value = content, isReadOnly = true, multiline = true };
                 textField.AddToClassList("selectable-message-text");
                 msgContainer.Add(textField);
+
+                if (sender == "AI")
+                {
+                    var summaryCopyBtn = new Button();
+                    summaryCopyBtn.text = "📋";
+                    summaryCopyBtn.AddToClassList("summary-copy-btn");
+                    summaryCopyBtn.tooltip = "Copy Summary Only";
+                    summaryCopyBtn.clicked += () => {
+                        EditorGUIUtility.systemCopyBuffer = content.Trim();
+                        Debug.Log($"[Omnisense] Summary copied to clipboard. Length: {content.Trim().Length}");
+                        
+                        summaryCopyBtn.text = "✓";
+                        summaryCopyBtn.schedule.Execute(() => {
+                            summaryCopyBtn.text = "📋";
+                        }).ExecuteLater(1500);
+                    };
+                    msgContainer.Add(summaryCopyBtn);
+                }
             }
 
             if (sender == "AI" && !string.IsNullOrEmpty(fullContent) && fullContent.Trim() != content.Trim())
@@ -899,12 +917,49 @@ namespace Omnisense
                 footer.style.justifyContent = Justify.FlexEnd;
                 footer.style.marginTop = 5;
 
-                string copyText = (sender == "User") ? content : (!string.IsNullOrEmpty(fullContent) ? fullContent : _currentTurnAIContent);
                 string btnText = (sender == "User") ? "Copy" : "Copy Full Response";
                 
                 var btnCopy = new Button(() => {
-                    EditorGUIUtility.systemCopyBuffer = copyText.Trim();
-                    Debug.Log("[Omnisense] Content copied to clipboard.");
+                    string copyBuffer = "";
+                    if (sender == "User")
+                    {
+                        copyBuffer = content;
+                    }
+                    else
+                    {
+                        // 1. Try passed fullContent closure
+                        if (!string.IsNullOrEmpty(fullContent))
+                        {
+                            copyBuffer = fullContent;
+                        }
+                        // 2. Try in-flight active session memory
+                        else if (!string.IsNullOrEmpty(_currentTurnAIContent))
+                        {
+                            copyBuffer = _currentTurnAIContent;
+                        }
+                        // 3. Extract dynamically from UI Foldout text field
+                        else
+                        {
+                            var foldoutEl = msgContainer.Q<Foldout>();
+                            if (foldoutEl != null)
+                            {
+                                var foldoutField = foldoutEl.Q<TextField>();
+                                if (foldoutField != null && !string.IsNullOrEmpty(foldoutField.value))
+                                {
+                                    copyBuffer = foldoutField.value;
+                                }
+                            }
+                        }
+
+                        // 4. Ultimate fallback to visible summary
+                        if (string.IsNullOrEmpty(copyBuffer))
+                        {
+                            copyBuffer = content;
+                        }
+                    }
+
+                    EditorGUIUtility.systemCopyBuffer = copyBuffer.Trim();
+                    Debug.Log($"[Omnisense] Content copied to clipboard. Length: {copyBuffer.Length}");
                 }) { text = btnText };
                 btnCopy.AddToClassList("copy-button-small");
 
@@ -979,7 +1034,10 @@ namespace Omnisense
                         _currentTurnAIContent = "";
                         for (int j = i; j >= 0 && session.messages[j].sender == "AI"; j--)
                         {
-                            _currentTurnAIContent = session.messages[j].content + "\n\n" + _currentTurnAIContent;
+                            string partContent = !string.IsNullOrEmpty(session.messages[j].fullContent) 
+                                ? session.messages[j].fullContent 
+                                : session.messages[j].content;
+                            _currentTurnAIContent = partContent + "\n\n" + _currentTurnAIContent;
                         }
                     }
                 }

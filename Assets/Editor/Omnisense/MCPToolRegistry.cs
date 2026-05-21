@@ -592,7 +592,7 @@ namespace Omnisense
                     foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
                     {
                         try {
-                            componentType = Array.Find(assembly.GetTypes(), t => t.Name == value);
+                            componentType = Array.Find(assembly.GetTypes(), t => (t.Name == value || t.FullName == value) && typeof(Component).IsAssignableFrom(t));
                             if (componentType != null) break;
                         } catch { continue; }
                     }
