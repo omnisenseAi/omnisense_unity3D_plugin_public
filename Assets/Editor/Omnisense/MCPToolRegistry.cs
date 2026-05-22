@@ -312,7 +312,7 @@ namespace Omnisense
                     // Handle parenting if requested
                     if (!string.IsNullOrEmpty(parentPath))
                     {
-                        GameObject parent = GameObject.Find(parentPath);
+                        GameObject parent = FindGameObjectDeep(parentPath);
                         if (parent != null) newNode.transform.SetParent(parent.transform);
                     }
 
@@ -399,11 +399,151 @@ namespace Omnisense
             }
         }
 
+        private static Type ResolveComponentType(string value)
+        {
+            if (string.IsNullOrEmpty(value)) return null;
+
+            Type componentType = null;
+            
+            // 1. Try direct resolution across all assemblies
+            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                try
+                {
+                    componentType = Array.Find(assembly.GetTypes(), t => 
+                        (t.Name.Equals(value, StringComparison.OrdinalIgnoreCase) || 
+                         t.FullName.Equals(value, StringComparison.OrdinalIgnoreCase)) && 
+                        typeof(Component).IsAssignableFrom(t));
+                    
+                    if (componentType != null) return componentType;
+                }
+                catch { continue; }
+            }
+
+            // 2. Dynamic mapping fallbacks for Text / TMPro depending on assembly state
+            string lowerVal = value.ToLower();
+            List<string> fallbackTypes = new List<string>();
+
+            if (lowerVal == "text" || lowerVal == "unityengine.ui.text")
+            {
+                fallbackTypes.Add("TMPro.TextMeshProUGUI");
+                fallbackTypes.Add("TextMeshProUGUI");
+                fallbackTypes.Add("TMPro.TextMeshPro");
+                fallbackTypes.Add("TextMeshPro");
+                fallbackTypes.Add("UnityEngine.UI.Text");
+            }
+            else if (lowerVal == "textmeshprougui" || lowerVal == "tmpro.textmeshprougui")
+            {
+                fallbackTypes.Add("UnityEngine.UI.Text");
+                fallbackTypes.Add("Text");
+                fallbackTypes.Add("TMPro.TextMeshPro");
+                fallbackTypes.Add("TextMeshPro");
+            }
+            else if (lowerVal == "textmeshpro" || lowerVal == "tmpro.textmeshpro")
+            {
+                fallbackTypes.Add("UnityEngine.UI.Text");
+                fallbackTypes.Add("Text");
+                fallbackTypes.Add("TMPro.TextMeshProUGUI");
+                fallbackTypes.Add("TextMeshProUGUI");
+            }
+
+            foreach (var fallback in fallbackTypes)
+            {
+                foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+                {
+                    try
+                    {
+                        componentType = Array.Find(assembly.GetTypes(), t => 
+                            (t.Name.Equals(fallback, StringComparison.OrdinalIgnoreCase) || 
+                             t.FullName.Equals(fallback, StringComparison.OrdinalIgnoreCase)) && 
+                            typeof(Component).IsAssignableFrom(t));
+                        
+                        if (componentType != null)
+                        {
+                            Debug.Log($"[Omnisense] Type resolution fallback: mapped '{value}' to '{componentType.FullName}'");
+                            return componentType;
+                        }
+                    }
+                    catch { continue; }
+                }
+            }
+
+            // 3. Last-resort fuzzy search: check if any type name contains or matches in a case-insensitive way
+            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                try
+                {
+                    componentType = Array.Find(assembly.GetTypes(), t => 
+                        (t.Name.IndexOf(value, StringComparison.OrdinalIgnoreCase) >= 0 || 
+                         t.FullName.IndexOf(value, StringComparison.OrdinalIgnoreCase) >= 0) && 
+                        typeof(Component).IsAssignableFrom(t));
+                    
+                    if (componentType != null) return componentType;
+                }
+                catch { continue; }
+            }
+
+            return null;
+        }
+
+        public static GameObject FindGameObjectDeep(string path)
+        {
+            if (string.IsNullOrEmpty(path)) return null;
+
+            string searchPath = path.Replace('\\', '/').Trim('/');
+            string[] parts = searchPath.Split('/');
+
+            var rootObjects = UnityEngine.SceneManagement.SceneManager.GetActiveScene().GetRootGameObjects();
+            foreach (var root in rootObjects)
+            {
+                if (root.name.Equals(parts[0], StringComparison.OrdinalIgnoreCase))
+                {
+                    GameObject found = FindGameObjectDeepRecursive(root.transform, parts, 1);
+                    if (found != null) return found;
+                }
+            }
+
+            foreach (var root in rootObjects)
+            {
+                GameObject found = FindByNameRecursive(root.transform, parts.Last());
+                if (found != null) return found;
+            }
+
+            return null;
+        }
+
+        private static GameObject FindGameObjectDeepRecursive(Transform parent, string[] parts, int index)
+        {
+            if (index >= parts.Length) return parent.gameObject;
+
+            string targetName = parts[index];
+            for (int i = 0; i < parent.childCount; i++)
+            {
+                Transform child = parent.GetChild(i);
+                if (child.name.Equals(targetName, StringComparison.OrdinalIgnoreCase))
+                {
+                    GameObject found = FindGameObjectDeepRecursive(child, parts, index + 1);
+                    if (found != null) return found;
+                }
+            }
+            return null;
+        }
+
+        private static GameObject FindByNameRecursive(Transform parent, string name)
+        {
+            if (parent.name.Equals(name, StringComparison.OrdinalIgnoreCase)) return parent.gameObject;
+            for (int i = 0; i < parent.childCount; i++)
+            {
+                GameObject found = FindByNameRecursive(parent.GetChild(i), name);
+                if (found != null) return found;
+            }
+            return null;
+        }
+
         public static GameObject FindGameObjectOrPrefab(string path)
         {
-            // 1. Try Scene Object
-            string searchPath = path.StartsWith("/") ? path.Substring(1) : path;
-            GameObject obj = GameObject.Find(searchPath);
+            // 1. Try Scene Object (deep lookup for active & inactive GameObjects)
+            GameObject obj = FindGameObjectDeep(path);
             if (obj != null) return obj;
             
             // 2. Try Prefab Deep Path Resolution
@@ -489,7 +629,7 @@ namespace Omnisense
                 if (comp == null) 
                 {
                     Component[] allComps = obj.GetComponents<Component>();
-                    comp = Array.Find(allComps, c => c != null && c.GetType().Name.Equals(componentName, StringComparison.OrdinalIgnoreCase));
+                    comp = Array.Find(allComps, c => c != null && (c.GetType().Name.Equals(componentName, StringComparison.OrdinalIgnoreCase) || c.GetType().FullName.Equals(componentName, StringComparison.OrdinalIgnoreCase)));
                     if (comp == null)
                     {
                         if (isPrefab) PrefabUtility.UnloadPrefabContents(prefabContents);
@@ -522,7 +662,6 @@ namespace Omnisense
         public static ToolResult ModifyNode(string path, string property, string value)
         {
             Debug.Log($"[Omnisense] Tool: ModifyNode(path='{path}', property='{property}', value='{value}')");
-            _lastNativeError = null; // Reset error tracker
             // Must be called on main thread
             try
             {
@@ -588,17 +727,17 @@ namespace Omnisense
                 }
                 else if (property.ToLower() == "add_component")
                 {
-                    Type componentType = null;
-                    foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
-                    {
-                        try {
-                            componentType = Array.Find(assembly.GetTypes(), t => (t.Name == value || t.FullName == value) && typeof(Component).IsAssignableFrom(t));
-                            if (componentType != null) break;
-                        } catch { continue; }
-                    }
+                    Type componentType = ResolveComponentType(value);
 
                     if (componentType != null)
                     {
+                        // Pre-flight check: see if the component is already present
+                        if (obj.GetComponent(componentType) != null)
+                        {
+                            if (isPrefab) PrefabUtility.UnloadPrefabContents(prefabContents);
+                            return new ToolResult { success = true, observation = $"SerializedSuccess: Component {value} already present on {obj.name}. No modification needed." };
+                        }
+
                         var comp = isPrefab ? obj.AddComponent(componentType) : Undo.AddComponent(obj, componentType);
                         if (comp == null)
                         {
@@ -621,6 +760,11 @@ namespace Omnisense
                 else if (property.ToLower() == "remove_component")
                 {
                     var component = obj.GetComponent(value);
+                    if (component == null)
+                    {
+                        var allComps = obj.GetComponents<Component>();
+                        component = Array.Find(allComps, c => c != null && (c.GetType().Name.Equals(value, StringComparison.OrdinalIgnoreCase) || c.GetType().FullName.Equals(value, StringComparison.OrdinalIgnoreCase)));
+                    }
                     if (component != null)
                     {
                         if (isPrefab) UnityEngine.Object.DestroyImmediate(component);
@@ -663,11 +807,6 @@ namespace Omnisense
                 {
                     PrefabUtility.SaveAsPrefabAsset(prefabContents, prefabAssetPath);
                     PrefabUtility.UnloadPrefabContents(prefabContents);
-                }
-
-                if (!string.IsNullOrEmpty(_lastNativeError))
-                {
-                    return new ToolResult { success = false, error = $"Unity Engine Error: {_lastNativeError}" };
                 }
 
                 return new ToolResult { success = true, observation = $"Modified {property} of {path} to {value}" };
@@ -766,8 +905,7 @@ namespace Omnisense
             Debug.Log($"[Omnisense] Tool: CreatePrefab(sceneObject='{sceneObjectPath}', destination='{destinationAssetPath}')");
             try
             {
-                string searchPath = sceneObjectPath.StartsWith("/") ? sceneObjectPath.Substring(1) : sceneObjectPath;
-                GameObject obj = GameObject.Find(searchPath);
+                GameObject obj = FindGameObjectDeep(sceneObjectPath);
                 if (obj == null) return new ToolResult { success = false, error = $"Scene object not found: {sceneObjectPath}" };
 
                 // Ensure path ends with .prefab
@@ -880,5 +1018,141 @@ namespace Omnisense
                 return new ToolResult { success = false, error = e.Message };
             }
         }
+
+        public static ToolResult ExecuteTransactions(List<TransactionOperation> operations)
+        {
+            Debug.Log($"[Omnisense] Tool: ExecuteTransactions(operationsCount={operations?.Count ?? 0})");
+            if (operations == null || operations.Count == 0)
+            {
+                return new ToolResult { success = false, error = "Operations list is empty." };
+            }
+
+            List<string> results = new List<string>();
+            bool overallSuccess = true;
+
+            for (int i = 0; i < operations.Count; i++)
+            {
+                var op = operations[i];
+                if (op == null)
+                {
+                    results.Add($"Operation {i + 1} Failed: Operation object is null.");
+                    overallSuccess = false;
+                    continue;
+                }
+
+                string actionName = !string.IsNullOrEmpty(op.action) ? op.action.ToLower() : (!string.IsNullOrEmpty(op.tool) ? op.tool.ToLower() : "");
+                
+                ToolResult subResult = null;
+                try
+                {
+                    if (actionName == "instantiate_node" || actionName == "scene/instantiate_node")
+                    {
+                        subResult = InstantiateNode(op.type, op.name, op.parent ?? op.path);
+                    }
+                    else if (actionName == "modify_node" || actionName == "scene/modify_node")
+                    {
+                        subResult = ModifyNode(op.path, op.property, op.value);
+                    }
+                    else if (actionName == "add_component" || actionName == "addcomponent")
+                    {
+                        subResult = ModifyNode(op.path, "add_component", string.IsNullOrEmpty(op.component) ? op.value : op.component);
+                    }
+                    else if (actionName == "remove_component" || actionName == "removecomponent")
+                    {
+                        subResult = ModifyNode(op.path, "remove_component", string.IsNullOrEmpty(op.component) ? op.value : op.component);
+                    }
+                    else if (actionName == "set_component_property" || actionName == "scene/set_component_property" || actionName == "set_property" || actionName == "setproperty")
+                    {
+                        subResult = SetComponentProperty(op.path, op.component, op.property, op.value);
+                    }
+                    else if (actionName == "add_child")
+                    {
+                        string parentPath = op.parent ?? op.path;
+                        string childName = op.name;
+                        
+                        subResult = InstantiateNode("GameObject", childName, parentPath);
+                        if (subResult.success)
+                        {
+                            string newChildPath = string.IsNullOrEmpty(parentPath) ? childName : $"{parentPath.TrimEnd('/')}/{childName}";
+                            
+                            if (op.components != null && op.components.Count > 0)
+                            {
+                                List<string> compResults = new List<string>();
+                                foreach (var compName in op.components)
+                                {
+                                    var compRes = ModifyNode(newChildPath, "add_component", compName);
+                                    compResults.Add(compRes.success ? compRes.observation : $"Error: {compRes.error}");
+                                }
+                                subResult.observation += $" Components: [{string.Join(", ", compResults)}]";
+                            }
+                            else
+                            {
+                                string compToAdd = string.IsNullOrEmpty(op.component) ? op.value : op.component;
+                                if (!string.IsNullOrEmpty(compToAdd))
+                                {
+                                    var compRes = ModifyNode(newChildPath, "add_component", compToAdd);
+                                    subResult.observation += $" Component: {(compRes.success ? compRes.observation : $"Error: {compRes.error}")}";
+                                }
+                            }
+                        }
+                    }
+                    else
+                    {
+                        subResult = new ToolResult { success = false, error = $"Unknown transaction action or tool: '{actionName}'" };
+                    }
+                }
+                catch (Exception ex)
+                {
+                    subResult = new ToolResult { success = false, error = $"Exception during operation '{actionName}': {ex.Message}" };
+                }
+
+                if (subResult != null)
+                {
+                    if (subResult.success)
+                    {
+                        results.Add($"Operation {i + 1} ({actionName}) Success: {subResult.observation}");
+                    }
+                    else
+                    {
+                        results.Add($"Operation {i + 1} ({actionName}) Failed: {subResult.error ?? "Unknown error."}");
+                        overallSuccess = false;
+                    }
+                }
+                else
+                {
+                    results.Add($"Operation {i + 1} ({actionName}) Failed: Sub-result was null.");
+                    overallSuccess = false;
+                }
+            }
+
+            string errorMsg = null;
+            if (!overallSuccess)
+            {
+                var failedOps = results.Where(r => r.Contains("Failed")).ToList();
+                errorMsg = $"ExecuteTransactions failed with {failedOps.Count} errors:\n" + string.Join("\n", results);
+            }
+
+            return new ToolResult
+            {
+                success = overallSuccess,
+                observation = string.Join("\n", results),
+                error = errorMsg
+            };
+        }
+    }
+
+    [Serializable]
+    public class TransactionOperation
+    {
+        public string action;
+        public string tool;
+        public string path;
+        public string parent;
+        public string name;
+        public string property;
+        public string value;
+        public string component;
+        public string type;
+        public List<string> components;
     }
 }

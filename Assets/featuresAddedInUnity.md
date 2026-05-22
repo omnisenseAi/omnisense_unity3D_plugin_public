@@ -320,4 +320,19 @@ The agent's "hands" have been specifically tuned for the Unity Editor environmen
 - **Dynamic Micro-Interaction**: Integrated real-time interactive feedback. Upon clicking, the pictograph icon instantly transitions from a clipboard symbol (`📋`) to a checkmark (`✓`) to provide visual confirmation of a successful copy, dynamically scheduling a restore back to `📋` after 1.5 seconds via the UI Toolkit scheduler.
 - **Seamless Interface Layout**: Styled the button with high-contrast hover indicators and custom alignment parameters (`align-self: flex-end`) in `OmnisenseWindow.uss`. This creates a polished, premium aesthetic that blends naturally with the existing chat bubbles and preserves the overall clean visual hierarchy.
 
+---
 
+## 40. High-Throughput Batch Architecture & Context Hardening (Phase 39)
+- **Streaming Trace Consolidation**: Re-architected orchestrator callbacks to explicitly separate UI message content from the technical execution trace (`fullTrace`). This completely eliminates redundant loop and observation logging in the UI foldouts while maintaining a single, clean state trace in the background.
+- **High-Throughput Batch Transactions**: Introduced the `scene/execute_transactions` tool payload. The agent can now construct and execute complex, multi-action JSON arrays natively in a single C# pass, effectively reducing a 25-step network bottleneck down to a 1-turn layout setup.
+- **Leveled Sliding Window**: Overhauled the context-pruning sliding window pattern to use a Leveled system. The AI's System Prompt, Project DNA, and Initial User Prompt are permanently pinned into memory, while only intermediate `<thought>` and `[Observation]` blocks are decayed, completely solving "Agentic Amnesia" loops during deep-work cycles.
+- **Native Pre-flight Component Guards**: Implemented pre-flight existence checks natively in the C# `add_component` tool block. The engine now returns a serialized success string natively if a component already exists on a GameObject instead of crashing with a native Unity Exception, keeping the execution flow entirely green and preventing the LLM from engaging in lazy renaming loops.
+- **Compiler Safety Enforcement**: Removed stale files from `.csproj` tracking and verified 0-error compilation across the plugin workspace.
+
+---
+
+## 41. Inactive GameObject Path Resolution & Case-Insensitive Deep Finder (Phase 40)
+- **Recursive Inactive Traversal**: Implemented a custom path-traversal algorithm `FindGameObjectDeep` in `MCPToolRegistry.cs` utilizing `SceneManager.GetActiveScene().GetRootGameObjects()`. This recursively traverses all scene objects (active or inactive) via `transform.GetChild(i)`, bypassing Unity's native `GameObject.Find()` limitation which strictly ignores inactive GameObjects.
+- **Case-Insensitive Typos/Casing Correction**: Incorporated case-insensitive deep-path matching using `StringComparison.OrdinalIgnoreCase`. This gracefully intercepts and resolves minor casing typos from the AI agent (e.g., matching nested casing variations) without breaking scene graph references.
+- **Deep Fallback Resolution**: Added a secondary fallback segment search (`FindByNameRecursive`) starting from any root GameObject if a full path cannot be constructed, maximizing path-resolution reliability in complex scenes.
+- **Compiler Safety & 0-Error Build Guarantee**: Re-verified the entire workspace's C# assembly compilation against the dotnet compiler to guarantee 0-error and 0-warning compiler compliance.

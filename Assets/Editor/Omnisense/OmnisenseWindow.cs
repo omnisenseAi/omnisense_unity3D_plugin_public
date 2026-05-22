@@ -303,8 +303,12 @@ namespace Omnisense
                 }
             }
 
-            AIOrchestrator.Instance.Resume(model, (response, isFinal) => {
-                if (isFinal) ToggleStopButton(false);
+            AIOrchestrator.Instance.Resume(model, (response, fullTrace, isFinal) => {
+                if (isFinal)
+                {
+                    ToggleStopButton(false);
+                    EditorPrefs.SetBool("Omnisense_AI_PendingResume", false);
+                }
                 if (isFinal && _loadingIndicator != null)
                 {
                     if (_chatHistory.Contains(_loadingIndicator)) _chatHistory.Remove(_loadingIndicator);
@@ -312,7 +316,7 @@ namespace Omnisense
                     _loadingIndicator = null;
                 }
                 
-                _currentTurnAIContent += response + "\n\n";
+                _currentTurnAIContent = fullTrace;
                 AddMessageToChat("AI", response, isFinal, currentTurnId, _currentTurnAIContent);
                 if (isFinal) Debug.Log("[Omnisense] Auto-Resume completed successfully.");
             });
@@ -556,7 +560,7 @@ namespace Omnisense
             
             ToggleStopButton(true);
 
-            AIOrchestrator.Instance.ProcessPrompt(contextText + text, _modelSelector.value, turnId, (response, isFinal) => {
+            AIOrchestrator.Instance.ProcessPrompt(contextText + text, _modelSelector.value, turnId, (response, fullTrace, isFinal) => {
                 if (isFinal) {
                     ToggleStopButton(false);
                     EditorPrefs.SetBool("Omnisense_AI_PendingResume", false);
@@ -568,7 +572,7 @@ namespace Omnisense
                     _loadingIndicator = null;
                 }
                 
-                _currentTurnAIContent += response + "\n\n";
+                _currentTurnAIContent = fullTrace;
                 AddMessageToChat("AI", response, isFinal, turnId, _currentTurnAIContent);
             });
         }

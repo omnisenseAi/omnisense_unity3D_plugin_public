@@ -71,12 +71,14 @@ namespace Omnisense
         private List<string> _turnContextLog = new List<string>();
         private List<string> _persistentScratchpad = new List<string>();
         private string _lastWorkerResponse = "";
+        private System.Text.StringBuilder _currentTurnTrace = new System.Text.StringBuilder();
+        private int _consecutiveManagerRejections = 0;
 
         [Serializable]
-        private class HistoryWrapper { public List<ChatMessage> list; }
+        public class HistoryWrapper { public List<ChatMessage> list; }
 
         [Serializable]
-        private class OrchestratorState
+        public class OrchestratorState
         {
             public bool isReflecting;
             public bool isManagerEvaluating;
@@ -90,6 +92,7 @@ namespace Omnisense
             public List<string> actionHistory;
             public List<string> turnContextLog;
             public List<string> persistentScratchpad;
+            public int consecutiveManagerRejections;
         }
 
         private void SaveState()
@@ -107,7 +110,8 @@ namespace Omnisense
                 lastWorkerResponse = _lastWorkerResponse,
                 actionHistory = _actionHistory,
                 turnContextLog = _turnContextLog,
-                persistentScratchpad = _persistentScratchpad
+                persistentScratchpad = _persistentScratchpad,
+                consecutiveManagerRejections = _consecutiveManagerRejections
             };
             EditorPrefs.SetString("Omnisense_AI_State", JsonUtility.ToJson(state));
         }
@@ -134,6 +138,7 @@ namespace Omnisense
                         _actionHistory = state.actionHistory ?? new List<string>();
                         _turnContextLog = state.turnContextLog ?? new List<string>();
                         _persistentScratchpad = state.persistentScratchpad ?? new List<string>();
+                        _consecutiveManagerRejections = state.consecutiveManagerRejections;
                     }
                 }
                 catch (Exception e)
@@ -170,6 +175,7 @@ namespace Omnisense
             _actionHistory.Clear();
             _turnContextLog.Clear();
             _persistentScratchpad.Clear();
+            _consecutiveManagerRejections = 0;
             SaveHistory();
             Debug.Log("[Omnisense] AI History cleared.");
         }
@@ -287,6 +293,7 @@ Available Tools:
 19. project/inspect_build_settings (params: none) - Returns the target platform and the list of scenes currently included in the Build Settings.
 20. project/get_asset_guid (params: ""path"") - Returns the unique Unity GUID for an asset path. Use this for stable asset tracking.
 21. scene/inspect_component (params: ""path"", ""component"") - Returns all public properties and fields of a specific component. Use this to discover exact property names (e.g. bodyType) before using set_component_property.
+22. scene/execute_transactions (params: ""operations"" as a list of objects containing ""action"" [e.g. ""add_child"", ""add_component"", ""set_component_property"", ""instantiate_node""], ""path"" / ""parent"", ""name"", ""component"", ""components"" [list of strings], ""property"", ""value"") - Executes multiple scene and prefab modification operations in a single fast network turn.
 
 Wait for the [Observation] from the system ONLY AFTER you have output a tool block.";
 
@@ -315,12 +322,15 @@ Available Tools:
 8. editor/read_console (params: none) - Returns the latest warnings/errors.
 9. scene/list_all_nodes (params: none) - Returns a list of all root GameObjects.
 10. scene/inspect_component (params: ""path"", ""component"") - Lists properties of a specific component.
-11. scene/set_component_property (params: ""path"", ""component"", ""property"", ""value"") - Sets a property on a component. For Arrays or Lists (e.g. List<Transform>), pass a comma-separated string of deep object paths (e.g. 'Assets/Prefab/Enemy.prefab/Waypoints/waypoint_1, Assets/Prefab/Enemy.prefab/Waypoints/waypoint_2'). NEVER use .Array.size or .Array.data[i] notation.";
+11. scene/set_component_property (params: ""path"", ""component"", ""property"", ""value"") - Sets a property on a component. For Arrays or Lists (e.g. List<Transform>), pass a comma-separated string of deep object paths (e.g. 'Assets/Prefab/Enemy.prefab/Waypoints/waypoint_1, Assets/Prefab/Enemy.prefab/Waypoints/waypoint_2'). NEVER use .Array.size or .Array.data[i] notation.
+12. scene/execute_transactions (params: ""operations"" as a list of objects containing ""action"" [e.g. ""add_child"", ""add_component"", ""set_component_property"", ""instantiate_node""], ""path"" / ""parent"", ""name"", ""component"", ""components"" [list of strings], ""property"", ""value"") - Executes multiple scene/prefab changes in a single fast network turn.";
 
-        public void ProcessPrompt(string prompt, string model, string turnId, Action<string, bool> onComplete)
+        public void ProcessPrompt(string prompt, string model, string turnId, Action<string, string, bool> onComplete)
         {
             Debug.Log($"[Omnisense-Diagnostics] --- NEW TURN STARTED: {turnId} ---");
             Debug.Log($"[Omnisense-Diagnostics] Processing prompt (Length: {prompt?.Length ?? 0} chars) with model: {model}");
+            _currentTurnTrace.Clear();
+            _currentTurnTrace.AppendLine("[System]: Analyzing request and classifying intent...");
             _turnToolCount = 0;
             _isReflecting = false;
             _isManagerEvaluating = false;
@@ -331,6 +341,7 @@ Available Tools:
             _actionHistory.Clear();
             _turnContextLog.Clear();
             _lastWorkerResponse = "";
+            _consecutiveManagerRejections = 0;
             OmnisenseUndoManager.StartTurn(turnId);
 
             // ─── STATE HANDOVER (SCRATCHPAD) ────────────────────────────────────────────────
@@ -375,6 +386,7 @@ Available Tools:
 
             // Persistently add the user's prompt so the Worker and Manager can see the full context
             _history.Add(new ChatMessage { role = "user", content = prompt });
+            SaveHistory();
 
             string plannerInstruction = @"[SYSTEM PLANNER INSTRUCTION]
 Evaluate the intent of the user's latest request in the context of the conversation history.
@@ -390,21 +402,21 @@ Output ONLY a valid JSON object in this exact format:
 }
 Do NOT output any other text or execute any tools yet.";
 
-            // Temporarily append the Planner instructions
-            _history.Add(new ChatMessage { role = "system", content = plannerInstruction });
-            SaveHistory();
+            // Construct isolated history list for the Planner call
+            var plannerHistory = new List<ChatMessage>(_history);
+            plannerHistory.Add(new ChatMessage { role = "system", content = plannerInstruction });
 
-            onComplete?.Invoke("[System]: Analyzing request and classifying intent...", false);
-            ExecuteRequest(model, onComplete);
+            onComplete?.Invoke("[System]: Analyzing request and classifying intent...", _currentTurnTrace.ToString(), false);
+            ExecuteRequest(model, onComplete, plannerHistory);
         }
 
 
-        private void StartNextTask(string model, Action<string, bool> onComplete)
+        private void StartNextTask(string model, Action<string, string, bool> onComplete)
         {
             if (_pendingTasks.Count == 0)
             {
                 Debug.Log("[Omnisense-Orchestration] StartNextTask called but queue is empty.");
-                onComplete?.Invoke("[System]: All tasks in the execution plan have been successfully completed.", true);
+                onComplete?.Invoke("[System]: All tasks in the execution plan have been successfully completed.", _currentTurnTrace.ToString(), true);
                 return;
             }
 
@@ -414,27 +426,44 @@ Do NOT output any other text or execute any tools yet.";
             _history.Add(new ChatMessage { role = "user", content = $"[Sub-Task]: {_currentTask}\n\nPlease execute this step using your MCP tools. If you are finished with this sub-task, summarize your work." });
             SaveHistory();
             
-            onComplete?.Invoke($"\n<color=#00FFFF><b>[Executing Task]:</b> {_currentTask}</color>\n", false);
+            string taskHeader = $"\n<color=#00FFFF><b>[Executing Task]:</b> {_currentTask}</color>\n";
+            _currentTurnTrace.AppendLine(taskHeader);
+            onComplete?.Invoke(taskHeader, _currentTurnTrace.ToString(), false);
             ExecuteRequest(model, onComplete);
         }
 
-        public void Resume(string model, Action<string, bool> onComplete)
+        public void Resume(string model, Action<string, string, bool> onComplete)
         {
             Debug.Log($"[Omnisense-Diagnostics] Resuming execution with model: {model}");
             ExecuteRequest(model, onComplete);
         }
 
-        private void ExecuteRequest(string model, Action<string, bool> onComplete)
+        private void ExecuteRequest(string model, Action<string, string, bool> onComplete, List<ChatMessage> customHistory = null)
         {
-            Debug.Log($"[Omnisense-Diagnostics] ExecuteRequest invoked. History count before prune: {_history.Count}");
-            PruneHistory();
-            Debug.Log($"[Omnisense-Diagnostics] History count after prune: {_history.Count}. Retrieving API Key...");
+            _stepCount++;
+            if (_stepCount > MAX_STEPS)
+            {
+                string limitMsg = $"\n\n[System Warning]: Maximum turn iterations ({MAX_STEPS}) reached for this sub-task. To prevent an infinite loop, I have paused execution. Please review my progress and provide further instructions.";
+                _currentTurnTrace.AppendLine(limitMsg);
+                onComplete?.Invoke(limitMsg, _currentTurnTrace.ToString(), true);
+                _history.Add(new ChatMessage { role = "assistant", content = "I have reached the execution limit for this sub-task. Pausing for user feedback." });
+                SaveHistory();
+                
+                // Clear pending state
+                EditorPrefs.SetBool("Omnisense_AI_PendingResume", false);
+                return;
+            }
+
+            List<ChatMessage> activeHistory = customHistory ?? _history;
+            Debug.Log($"[Omnisense-Diagnostics] ExecuteRequest invoked. History count before prune: {activeHistory.Count}");
+            PruneHistory(activeHistory);
+            Debug.Log($"[Omnisense-Diagnostics] History count after prune: {activeHistory.Count}. Retrieving API Key...");
 
             string apiKey = GetApiKey(model);
             if (string.IsNullOrEmpty(apiKey) && model != "self-hosted")
             {
                 Debug.LogError("[Omnisense-Diagnostics] API Key is missing or empty.");
-                onComplete?.Invoke("Error: API Key missing. Please set it in the Settings tab.", true);
+                onComplete?.Invoke("Error: API Key missing. Please set it in the Settings tab.", _currentTurnTrace.ToString(), true);
                 return;
             }
 
@@ -446,29 +475,29 @@ Do NOT output any other text or execute any tools yet.";
             // Prepare request based on provider
             if (model.StartsWith("gpt") || model.StartsWith("o3"))
             {
-                CallOpenAI(apiKey, model, onComplete);
+                CallOpenAI(apiKey, model, onComplete, activeHistory);
             }
             else if (model.StartsWith("claude"))
             {
-                CallAnthropic(apiKey, model, onComplete);
+                CallAnthropic(apiKey, model, onComplete, activeHistory);
             }
             else if (model.StartsWith("gemini"))
             {
-                CallGemini(apiKey, model, onComplete);
+                CallGemini(apiKey, model, onComplete, activeHistory);
             }
             else if (model.StartsWith("grok"))
             {
-                CallGrok(apiKey, model, onComplete);
+                CallGrok(apiKey, model, onComplete, activeHistory);
             }
             else if (model == "self-hosted")
             {
-                CallSelfHosted(apiKey, model, onComplete);
+                CallSelfHosted(apiKey, model, onComplete, activeHistory);
             }
             else
             {
                 EditorPrefs.SetBool("Omnisense_AI_PendingResume", false);
                 Debug.LogError($"[Omnisense] Unsupported model selected: {model}");
-                onComplete?.Invoke($"Error: Unsupported model {model}", true);
+                onComplete?.Invoke($"Error: Unsupported model {model}", _currentTurnTrace.ToString(), true);
             }
         }
 
@@ -487,12 +516,12 @@ Do NOT output any other text or execute any tools yet.";
             }
         }
 
-        private void CallOpenAI(string apiKey, string model, Action<string, bool> onComplete)
+        private void CallOpenAI(string apiKey, string model, Action<string, string, bool> onComplete, List<ChatMessage> activeHistory)
         {
             if (_isAborted) return;
             // We previously injected an aggressive format reminder here, but it caused the LLM 
             // to hallucinate endless tool calls because it thought it was forced to output JSON.
-            var payloadMessages = new List<ChatMessage>(_history);
+            var payloadMessages = new List<ChatMessage>(activeHistory);
 
             int maxTokens = EditorPrefs.GetInt("Omnisense_OpenAI_MaxTokens", 4096);
             var requestData = new OpenAIRequest { model = model, messages = payloadMessages, max_completion_tokens = maxTokens };
@@ -522,11 +551,11 @@ Do NOT output any other text or execute any tools yet.";
                     string errorDetail = "";
                     try { errorDetail = req.downloadHandler?.text ?? ""; } catch { }
                     Debug.LogError($"[Omnisense] API Error: {req.error}\n{errorDetail}");
-                    onComplete?.Invoke($"[System Error]: API Request failed ({req.result}).\nDetails: {req.error}\n{errorDetail}", true);
+                    onComplete?.Invoke($"[System Error]: API Request failed ({req.result}).\nDetails: {req.error}\n{errorDetail}", _currentTurnTrace.ToString(), true);
                 }
                 else if (!_isAborted)
                 {
-                    onComplete?.Invoke($"[System Error]: Unexpected API failure ({req.result}).", true);
+                    onComplete?.Invoke($"[System Error]: Unexpected API failure ({req.result}).", _currentTurnTrace.ToString(), true);
                 }
                 
                 req.Dispose();
@@ -534,10 +563,10 @@ Do NOT output any other text or execute any tools yet.";
             };
         }
 
-        private void CallAnthropic(string apiKey, string model, Action<string, bool> onComplete)
+        private void CallAnthropic(string apiKey, string model, Action<string, string, bool> onComplete, List<ChatMessage> activeHistory)
         {
             if (_isAborted) return;
-            var payloadMessages = new List<ChatMessage>(_history);
+            var payloadMessages = new List<ChatMessage>(activeHistory);
             int maxTokens = EditorPrefs.GetInt("Omnisense_Anthropic_MaxTokens", 4096);
             
             // Anthropic expects a slightly different JSON structure
@@ -574,9 +603,9 @@ Do NOT output any other text or execute any tools yet.";
                 } else if (req.result == UnityWebRequest.Result.ConnectionError || req.result == UnityWebRequest.Result.ProtocolError) {
                     string errorDetail = "";
                     try { errorDetail = req.downloadHandler?.text ?? ""; } catch { }
-                    onComplete?.Invoke($"Anthropic Error: {req.error}\n{errorDetail}", true);
+                    onComplete?.Invoke($"Anthropic Error: {req.error}\n{errorDetail}", _currentTurnTrace.ToString(), true);
                 } else if (!_isAborted) {
-                    onComplete?.Invoke($"Anthropic Error: Unexpected failure ({req.result})", true);
+                    onComplete?.Invoke($"Anthropic Error: Unexpected failure ({req.result})", _currentTurnTrace.ToString(), true);
                 }
                 
                 req.Dispose();
@@ -584,17 +613,17 @@ Do NOT output any other text or execute any tools yet.";
             };
         }
 
-        private void CallGemini(string apiKey, string model, Action<string, bool> onComplete)
+        private void CallGemini(string apiKey, string model, Action<string, string, bool> onComplete, List<ChatMessage> activeHistory)
         {
             if (_isAborted) return;
             int maxTokens = EditorPrefs.GetInt("Omnisense_Gemini_MaxTokens", 4096);
             
             // Gemini JSON structure is nested: contents -> parts -> text
             string contentsJson = "[";
-            for(int i=0; i<_history.Count; i++) {
-                string role = _history[i].role == "assistant" ? "model" : "user";
-                contentsJson += "{\"role\":\"" + role + "\",\"parts\":[{\"text\":\"" + _history[i].content.Replace("\"", "\\\"").Replace("\n", "\\n") + "\"}]}";
-                if(i < _history.Count-1) contentsJson += ",";
+            for(int i=0; i<activeHistory.Count; i++) {
+                string role = activeHistory[i].role == "assistant" ? "model" : "user";
+                contentsJson += "{\"role\":\"" + role + "\",\"parts\":[{\"text\":\"" + activeHistory[i].content.Replace("\"", "\\\"").Replace("\n", "\\n") + "\"}]}";
+                if(i < activeHistory.Count-1) contentsJson += ",";
             }
             contentsJson += "]";
             
@@ -619,9 +648,9 @@ Do NOT output any other text or execute any tools yet.";
                 } else if (req.result == UnityWebRequest.Result.ConnectionError || req.result == UnityWebRequest.Result.ProtocolError) {
                     string errorDetail = "";
                     try { errorDetail = req.downloadHandler?.text ?? ""; } catch { }
-                    onComplete?.Invoke($"Gemini Error: {req.error}\n{errorDetail}", true);
+                    onComplete?.Invoke($"Gemini Error: {req.error}\n{errorDetail}", _currentTurnTrace.ToString(), true);
                 } else if (!_isAborted) {
-                    onComplete?.Invoke($"Gemini Error: Unexpected failure ({req.result})", true);
+                    onComplete?.Invoke($"Gemini Error: Unexpected failure ({req.result})", _currentTurnTrace.ToString(), true);
                 }
                 
                 req.Dispose();
@@ -629,11 +658,11 @@ Do NOT output any other text or execute any tools yet.";
             };
         }
 
-        private void CallGrok(string apiKey, string model, Action<string, bool> onComplete)
+        private void CallGrok(string apiKey, string model, Action<string, string, bool> onComplete, List<ChatMessage> activeHistory)
         {
             if (_isAborted) return;
             int maxTokens = EditorPrefs.GetInt("Omnisense_Grok_MaxTokens", 4096);
-            var payloadMessages = new List<ChatMessage>(_history);
+            var payloadMessages = new List<ChatMessage>(activeHistory);
             var requestData = new OpenAIRequest { model = model, messages = payloadMessages, max_completion_tokens = maxTokens };
             string json = JsonUtility.ToJson(requestData);
 
@@ -655,9 +684,9 @@ Do NOT output any other text or execute any tools yet.";
                 } else if (req.result == UnityWebRequest.Result.ConnectionError || req.result == UnityWebRequest.Result.ProtocolError) {
                     string errorDetail = "";
                     try { errorDetail = req.downloadHandler?.text ?? ""; } catch { }
-                    onComplete?.Invoke($"Grok Error: {req.error}\n{errorDetail}", true);
+                    onComplete?.Invoke($"Grok Error: {req.error}\n{errorDetail}", _currentTurnTrace.ToString(), true);
                 } else if (!_isAborted) {
-                    onComplete?.Invoke($"Grok Error: Unexpected failure ({req.result})", true);
+                    onComplete?.Invoke($"Grok Error: Unexpected failure ({req.result})", _currentTurnTrace.ToString(), true);
                 }
                 
                 req.Dispose();
@@ -665,7 +694,7 @@ Do NOT output any other text or execute any tools yet.";
             };
         }
 
-        private void CallSelfHosted(string apiKey, string model, Action<string, bool> onComplete)
+        private void CallSelfHosted(string apiKey, string model, Action<string, string, bool> onComplete, List<ChatMessage> activeHistory)
         {
             if (_isAborted) return;
             string baseUrl = EditorPrefs.GetString("Omnisense_SelfHosted_URL", "http://localhost:11434/v1");
@@ -680,7 +709,7 @@ Do NOT output any other text or execute any tools yet.";
 
             string targetModel = EditorPrefs.GetString("Omnisense_SelfHosted_Model", "llama3:8b");
             int maxTokens = EditorPrefs.GetInt("Omnisense_SelfHosted_MaxTokens", 4096);
-            var payloadMessages = new List<ChatMessage>(_history);
+            var payloadMessages = new List<ChatMessage>(activeHistory);
             
             var requestData = new OpenAIRequest { model = targetModel, messages = payloadMessages, max_completion_tokens = maxTokens };
             string json = JsonUtility.ToJson(requestData);
@@ -706,7 +735,7 @@ Do NOT output any other text or execute any tools yet.";
                 } else {
                     string errorDetail = "";
                     try { errorDetail = _activeRequest.downloadHandler?.text ?? ""; } catch { }
-                    onComplete?.Invoke($"Self-Hosted Error: {_activeRequest.error}\n{errorDetail}", true);
+                    onComplete?.Invoke($"Self-Hosted Error: {_activeRequest.error}\n{errorDetail}", _currentTurnTrace.ToString(), true);
                 }
                 _activeRequest?.Dispose(); _activeRequest = null;
             };
@@ -795,7 +824,7 @@ Do NOT output any other text or execute any tools yet.";
 
         public event Action<string, Action<bool>> OnPendingAction;
 
-        private void HandleResponse(string response, string model, Action<string, bool> onComplete)
+        private void HandleResponse(string response, string model, Action<string, string, bool> onComplete)
         {
             if (_isPlanning)
             {
@@ -807,6 +836,8 @@ Do NOT output any other text or execute any tools yet.";
                 {
                     _history.RemoveAt(_history.Count - 1);
                 }
+
+                _currentTurnTrace.AppendLine("[System]: Planning Response Received. Parsing Task List...");
 
                 try 
                 {
@@ -829,7 +860,8 @@ Do NOT output any other text or execute any tools yet.";
                                 _history.Add(new ChatMessage { role = "user", content = "[System]: The user has asked a conceptual or general question. You do not need to use tools to answer this. Please answer the user directly and comprehensively in plain text. DO NOT output a tool block." });
                                 SaveHistory();
                                 
-                                onComplete?.Invoke("\n<b>[Manager] Classified as General Knowledge. Bypassing tool execution...</b>\n\n[System]: Generating response...", false);
+                                _currentTurnTrace.AppendLine("<b>[Manager] Classified as General Knowledge. Bypassing tool execution.</b>");
+                                onComplete?.Invoke("\n<b>[Manager] Classified as General Knowledge. Bypassing tool execution...</b>\n\n[System]: Generating response...", _currentTurnTrace.ToString(), false);
                                 ExecuteRequest(model, onComplete);
                                 return;
                             }
@@ -854,6 +886,8 @@ Do NOT output any other text or execute any tools yet.";
                 
                 _history.Add(new ChatMessage { role = "assistant", content = planUi });
                 SaveHistory();
+
+                _currentTurnTrace.AppendLine(planUi);
 
                 StartNextTask(model, onComplete);
                 return;
@@ -899,6 +933,7 @@ Do NOT output any other text or execute any tools yet.";
                     Debug.Log("[Omnisense-Orchestration] Manager Approved Task Completion.");
                     _turnToolCount = 0;
                     _isReflecting = false;
+                    _consecutiveManagerRejections = 0;
                     PruneHistory();
                     
                     _history.Add(new ChatMessage { role = "assistant", content = $"<thought>Manager approved sub-task completion.</thought> {feedback}" });
@@ -925,10 +960,11 @@ Do NOT output any other text or execute any tools yet.";
                     {
                         Debug.Log($"[Omnisense-Orchestration] Moving to next sub-task. ({_pendingTasks.Count} remaining)");
                         string subTaskResult = !string.IsNullOrEmpty(_lastWorkerResponse) 
-                            ? $"{_lastWorkerResponse}\n\n<color=#00FF00><b>[Manager Approved Sub-Task]:</b></color> {feedback}" 
+                             ? $"{_lastWorkerResponse}\n\n<color=#00FF00><b>[Manager Approved Sub-Task]:</b></color> {feedback}" 
                             : $"<color=#00FF00><b>[Manager Approved Sub-Task]:</b></color> {feedback}";
                         
-                        onComplete?.Invoke(subTaskResult, false);
+                        _currentTurnTrace.AppendLine($"[Manager Approved Sub-Task]: {feedback}");
+                        onComplete?.Invoke(subTaskResult, _currentTurnTrace.ToString(), false);
                         StartNextTask(model, onComplete);
                     }
                     else
@@ -938,16 +974,32 @@ Do NOT output any other text or execute any tools yet.";
                             ? $"{_lastWorkerResponse}\n\n<color=#00FF00><b>[Manager Approved]: All tasks complete.</b></color>\n{feedback}" 
                             : $"<color=#00FF00><b>[Manager Approved]: All tasks complete.</b></color>\n{feedback}";
                         
-                        onComplete?.Invoke(finalResult, true);
+                        _currentTurnTrace.AppendLine($"[Manager Approved]: All tasks complete. {feedback}");
+                        onComplete?.Invoke(finalResult, _currentTurnTrace.ToString(), true);
                     }
                 }
                 else
                 {
-                    Debug.Log($"[Omnisense-Orchestration] Manager REJECTED Completion. Feedback: {feedback}");
+                    _consecutiveManagerRejections++;
+                    Debug.Log($"[Omnisense-Orchestration] Manager REJECTED Completion. Feedback: {feedback} (Consecutive Rejections: {_consecutiveManagerRejections})");
+                    
+                    if (_consecutiveManagerRejections >= 3)
+                    {
+                        _pendingTasks.Clear();
+                        _consecutiveManagerRejections = 0;
+                        string limitMsg = "\n\n[System Intervention]: The Manager has rejected this task 3 times consecutively. Paused to prevent death loop. Review feedback and guide the agent manually.";
+                        _currentTurnTrace.AppendLine(limitMsg);
+                        onComplete?.Invoke($"<color=#FF5555><b>[System Intervention]:</b></color> The Manager has rejected this task 3 times consecutively. Paused to prevent a death loop. Review feedback and guide the agent manually.\n\nFeedback: {feedback}", _currentTurnTrace.ToString(), true);
+                        _history.Add(new ChatMessage { role = "assistant", content = "Manager has rejected this task 3 times consecutively. Pausing for user feedback." });
+                        SaveHistory();
+                        return;
+                    }
+
                     _history.Add(new ChatMessage { role = "user", content = $"[Manager Audit Failed]: The Manager detected that the task is incomplete. Feedback: {feedback}\n\nSYSTEM DIRECTIVE: Review the feedback above, plan how to resolve the missing requirements, and immediately use your edit/write tools to apply the changes to the scripts. Do not stop at reading or verifying; you must write the required code edits to complete the sub-task." });
                     SaveHistory();
                     
-                    onComplete?.Invoke($"<color=#FF5555><b>[Manager Rejected]:</b></color> {feedback}\nResuming execution...", false);
+                    _currentTurnTrace.AppendLine($"[Manager Rejected Sub-Task]: {feedback}");
+                    onComplete?.Invoke($"<color=#FF5555><b>[Manager Rejected]:</b></color> {feedback}\nResuming execution...", _currentTurnTrace.ToString(), false);
                     ExecuteRequest(model, onComplete);
                 }
                 
@@ -956,6 +1008,25 @@ Do NOT output any other text or execute any tools yet.";
 
             _history.Add(new ChatMessage { role = "assistant", content = response });
             SaveHistory();
+            _currentTurnTrace.AppendLine($"[Assistant]\n{response}\n");
+
+            // Loop detection on identical consecutive responses (Cognitive Loop Detector)
+            int assistantMsgCount = _history.Count(m => m.role == "assistant");
+            if (assistantMsgCount >= 3)
+            {
+                var assistantMsgs = _history.Where(m => m.role == "assistant").Reverse().Take(3).ToList();
+                if (assistantMsgs[0].content == assistantMsgs[1].content && assistantMsgs[1].content == assistantMsgs[2].content)
+                {
+                    _pendingTasks.Clear();
+                    string loopMsg = "\n\n[System Intervention]: Identical consecutive worker responses detected. Pausing to prevent cognitive death loop. Please check your instructions.";
+                    _currentTurnTrace.AppendLine(loopMsg);
+                    onComplete?.Invoke($"<color=#FF5555><b>[System Intervention]:</b></color> Identical consecutive worker responses detected. Pausing to prevent a cognitive death loop.\n\nResponse:\n{response}", _currentTurnTrace.ToString(), true);
+                    
+                    // Reset pending state
+                    EditorPrefs.SetBool("Omnisense_AI_PendingResume", false);
+                    return;
+                }
+            }
 
             string toolJson = ExtractToolCall(response);
             if (!string.IsNullOrEmpty(toolJson))
@@ -964,7 +1035,7 @@ Do NOT output any other text or execute any tools yet.";
                 string uiResponse = response.Replace("```mcp_json", "[Executing Tool...]").Replace("```", "");
                 string thought = ExtractThought(response);
                 if (!string.IsNullOrEmpty(thought)) uiResponse = $"<thought>{thought}</thought>\n\n[System]: Actioning your request...";
-                onComplete?.Invoke(uiResponse, false);
+                onComplete?.Invoke(uiResponse, _currentTurnTrace.ToString(), false);
 
                 try
                 {
@@ -976,7 +1047,8 @@ Do NOT output any other text or execute any tools yet.";
                                          toolCall.method == "project/create_tag_or_layer" ||
                                          toolCall.method == "scene/instantiate_node" ||
                                          toolCall.method == "scene/modify_node" ||
-                                         toolCall.method == "scene/set_component_property";
+                                         toolCall.method == "scene/set_component_property" ||
+                                         toolCall.method == "scene/execute_transactions";
 
                     if (isDestructive && OnPendingAction != null)
                     {
@@ -991,6 +1063,7 @@ Do NOT output any other text or execute any tools yet.";
                                 Debug.Log("[Omnisense] User rejected pending action.");
                                 _history.Add(new ChatMessage { role = "user", content = "[Observation]\nThe user rejected this change. Please revise your plan or ask for clarification." });
                                 SaveHistory();
+                                _currentTurnTrace.AppendLine("[Observation]\nUser rejected this change.");
                                 ExecuteRequest(model, onComplete);
                             }
                         });
@@ -1006,6 +1079,7 @@ Do NOT output any other text or execute any tools yet.";
                     Debug.LogError($"[Omnisense] Error parsing tool call: {e.Message}");
                     _history.Add(new ChatMessage { role = "user", content = $"[System Error]\nFailed to parse tool request. Ensure your JSON is strictly formatted and enclosed in correct markdown blocks. Do NOT output multiple JSON blocks at once. Only one tool call is allowed per response.\nDetails: {e.Message}" });
                     SaveHistory();
+                    _currentTurnTrace.AppendLine($"[System Error]: Failed to parse tool request: {e.Message}");
                     ExecuteRequest(model, onComplete);
                 }
             }
@@ -1014,7 +1088,7 @@ Do NOT output any other text or execute any tools yet.";
                 if (_isConceptualTurn)
                 {
                     Debug.Log("[Omnisense] Conceptual turn complete.");
-                    onComplete?.Invoke(response, true);
+                    onComplete?.Invoke(response, _currentTurnTrace.ToString(), true);
                     return;
                 }
 
@@ -1032,7 +1106,7 @@ Do NOT output any other text or execute any tools yet.";
                         _history.Add(new ChatMessage { role = "user", content = "[System]\nYou output a thought block but no summary or tool call. If you are finished, you MUST summarize your work to the user in plain text. If you need to fix something, output a valid ```mcp_json tool block. NEVER stop generating without providing a tool or a summary." });
                         SaveHistory();
                         string nudgeUiResponse = !string.IsNullOrEmpty(extractedThought) ? $"<thought>{extractedThought}</thought>\n\n[System]: Nudging agent to finalize reflection..." : "[System]: Nudging agent to finalize reflection...";
-                        onComplete?.Invoke(nudgeUiResponse, false);
+                        onComplete?.Invoke(nudgeUiResponse, _currentTurnTrace.ToString(), false);
                         ExecuteRequest(model, onComplete);
                     }
                     else
@@ -1041,7 +1115,7 @@ Do NOT output any other text or execute any tools yet.";
                         _history.Add(new ChatMessage { role = "user", content = "[System]\nYou created a plan but did not execute a tool. Please execute your plan by outputting a valid ```mcp_json tool block in your very next response. NEVER stop generating." });
                         SaveHistory();
                         string nudgeUiResponse = !string.IsNullOrEmpty(extractedThought) ? $"<thought>{extractedThought}</thought>\n\n[System]: Nudging agent to execute plan..." : "[System]: Nudging agent to execute plan...";
-                        onComplete?.Invoke(nudgeUiResponse, false);
+                        onComplete?.Invoke(nudgeUiResponse, _currentTurnTrace.ToString(), false);
                         ExecuteRequest(model, onComplete);
                     }
                 }
@@ -1051,7 +1125,7 @@ Do NOT output any other text or execute any tools yet.";
                     _isReflecting = true;
                     _history.Add(new ChatMessage { role = "user", content = "[System Audit]: If you are finished with the user's request, review your changes: Are there any null references, missing components, or obvious next steps to make the feature functional? If yes, execute tools to fix them. If you are NOT finished, please continue your work by using a tool. If everything is done, summarize your work to the user." });
                     SaveHistory();
-                    onComplete?.Invoke(response + "\n\n[System]: Auditing changes and finalizing...", false);
+                    onComplete?.Invoke(response + "\n\n[System]: Auditing changes and finalizing...", _currentTurnTrace.ToString(), false);
                     ExecuteRequest(model, onComplete);
                 }
                 else
@@ -1060,64 +1134,130 @@ Do NOT output any other text or execute any tools yet.";
                     _isManagerEvaluating = true;
                     _lastWorkerResponse = response;
                     
-                    _history.Add(new ChatMessage { role = "user", content = $"MANAGER AUDIT: You are the Manager Agent. Review the chat history and evaluate the Worker's execution of the CURRENT SUB-TASK: '{_currentTask}'. Did the worker successfully complete this specific sub-task? Do NOT evaluate against the entire user request, ONLY evaluate if this specific sub-task is done. Do not be overly pedantic about terminology. If the worker provides tool output (such as InspectNode) that reasonably shows the requested change exists, approve the task. Remember that Unity Prefab Assets are often displayed as 'GameObjects' or '[Prefab Asset]' in tool outputs. Output ONLY valid JSON in this exact format: {{\"is_complete\": true/false, \"feedback\": \"If false, list exactly what is missing from THIS sub-task. If true, summarize the success.\"}}" });
-                    SaveHistory();
+                    string managerAuditPrompt = $"MANAGER AUDIT: You are the Manager Agent. Review the chat history and evaluate the Worker's execution of the CURRENT SUB-TASK: '{_currentTask}'. Did the worker successfully complete this specific sub-task? Do NOT evaluate against the entire user request, ONLY evaluate if this specific sub-task is done. Do not be overly pedantic about terminology. If the worker provides tool output (such as InspectNode) that reasonably shows the requested change exists, approve the task. Remember that Unity Prefab Assets are often displayed as 'GameObjects' or '[Prefab Asset]' in tool outputs. Output ONLY valid JSON in this exact format: {{\"is_complete\": true/false, \"feedback\": \"If false, list exactly what is missing from THIS sub-task. If true, summarize the success.\"}}";
                     
-                    onComplete?.Invoke(response + "\n\n[System]: Manager is verifying completion...", false);
-                    ExecuteRequest(model, onComplete);
+                    var managerHistory = new List<ChatMessage>(_history);
+                    managerHistory.Add(new ChatMessage { role = "user", content = managerAuditPrompt });
+                    
+                    onComplete?.Invoke(response + "\n\n[System]: Manager is verifying completion...", _currentTurnTrace.ToString(), false);
+                    ExecuteRequest(model, onComplete, managerHistory);
                 }
             }
         }
 
-        private void PruneHistory()
+        private void PruneHistory(List<ChatMessage> history = null)
         {
-            // 1. SOTA SLIDING WINDOW: Keep System Prompts (DNA/System) and the last N messages.
-            // This prevents "Lost in the Middle" errors and ensures Tool Definitions (index 0) stay in the attention span.
-            int preserveRecentCount = 20; 
-            if (_history.Count > preserveRecentCount + 5) // Only prune if we have a significant buffer
+            if (history == null) history = _history;
+
+            // 1. LEVELED SLIDING WINDOW: Pin core System Prompts, DNA, Environment State and the first User prompt,
+            // while pruning intermediate middle tool calls and observations to protect conversational context.
+            
+            // Find the initial user message (first user message sent that is not a system control nudge/subtask)
+            ChatMessage firstUserMsg = null;
+            foreach (var msg in history)
+            {
+                if (msg.role == "user" && !msg.content.StartsWith("[Observation]") && !msg.content.StartsWith("[Sub-Task]:") && !msg.content.StartsWith("[Manager Audit Failed]:"))
+                {
+                    firstUserMsg = msg;
+                    break;
+                }
+            }
+
+            // Create a list of pinned messages
+            List<ChatMessage> pinned = new List<ChatMessage>();
+            ChatMessage latestSubTask = null;
+            ChatMessage latestManagerFailed = null;
+
+            foreach (var msg in history)
+            {
+                // Pin core system setup messages
+                if (msg.role == "system" && (msg.content.StartsWith("You are the Omnisense") || msg.content.StartsWith("You are the AI") || msg.content.StartsWith("[PROJECT DNA]") || msg.content.StartsWith("[CURRENT ENVIRONMENT STATE]")))
+                {
+                    pinned.Add(msg);
+                }
+                if (msg.role == "user" && msg.content.StartsWith("[Sub-Task]:"))
+                {
+                    latestSubTask = msg;
+                }
+                if (msg.role == "user" && msg.content.StartsWith("[Manager Audit Failed]:"))
+                {
+                    latestManagerFailed = msg;
+                }
+            }
+            if (firstUserMsg != null && !pinned.Contains(firstUserMsg))
+            {
+                pinned.Add(firstUserMsg);
+            }
+            if (latestSubTask != null && !pinned.Contains(latestSubTask))
+            {
+                pinned.Add(latestSubTask);
+            }
+            if (latestManagerFailed != null && !pinned.Contains(latestManagerFailed))
+            {
+                pinned.Add(latestManagerFailed);
+            }
+
+            int targetThreshold = 30; // Max allowed history messages before leveled pruning
+            if (history.Count > targetThreshold)
             {
                 List<ChatMessage> optimizedHistory = new List<ChatMessage>();
                 
-                // Always keep the System Prompt (Tool Definitions) and Project DNA
-                foreach (var msg in _history) {
-                    if (msg.role == "system") optimizedHistory.Add(msg);
+                // Add all pinned items first
+                foreach (var pMsg in pinned)
+                {
+                    optimizedHistory.Add(pMsg);
                 }
-                
-                // Keep the last N messages for immediate task context
-                int startIdx = Mathf.Max(0, _history.Count - preserveRecentCount);
-                for (int i = startIdx; i < _history.Count; i++) {
-                    if (_history[i].role != "system") optimizedHistory.Add(_history[i]);
+
+                // Add the last 20 messages (excluding what is already pinned)
+                int lastNCount = 20;
+                int startIdx = Mathf.Max(0, history.Count - lastNCount);
+                List<ChatMessage> recentMessages = new List<ChatMessage>();
+                for (int i = startIdx; i < history.Count; i++)
+                {
+                    if (!pinned.Contains(history[i]))
+                    {
+                        recentMessages.Add(history[i]);
+                    }
                 }
-                
-                int removedCount = _history.Count - optimizedHistory.Count;
-                _history = optimizedHistory;
-                if (removedCount > 0) Debug.Log($"[Omnisense] Sliding Window active: Removed {removedCount} messages to optimize reasoning.");
+                optimizedHistory.AddRange(recentMessages);
+
+                int removedCount = history.Count - optimizedHistory.Count;
+                if (removedCount > 0)
+                {
+                    if (history == _history)
+                    {
+                        _history = optimizedHistory;
+                    }
+                    else
+                    {
+                        history.Clear();
+                        history.AddRange(optimizedHistory);
+                    }
+                    Debug.Log($"[Omnisense] Leveled Sliding Window active: Pruned {removedCount} intermediate messages. Pins: {pinned.Count}, Recents: {recentMessages.Count}");
+                }
             }
 
             // 2. BI-DIRECTIONAL CONTENT PRUNING: Truncate large blocks in BOTH User and Assistant roles.
-            // This stops the Assistant's own massive code writes from bloating the context window.
-            for (int i = 0; i < _history.Count; i++)
+            for (int i = 0; i < history.Count; i++)
             {
-                // Never prune System prompts or the most recent 12 messages (for conversational coherence)
-                if (_history[i].role == "system" || i > _history.Count - 12) continue;
+                if (history[i].role == "system" || history[i] == firstUserMsg || i > history.Count - 15) continue;
 
-                if (_history[i].role == "user" && _history[i].content.Length > 500)
+                if (history[i].role == "user" && history[i].content.Length > 1500)
                 {
-                    // Prune User Observations (Reads)
-                    if (_history[i].content.StartsWith("[Observation]"))
+                    if (history[i].content.StartsWith("[Observation]"))
                     {
-                        _history[i].content = "[Observation]\n(Output truncated to preserve context window).";
+                        int length = history[i].content.Length;
+                        string head = history[i].content.Substring(0, 1000);
+                        string tail = history[i].content.Substring(length - 500);
+                        history[i].content = $"{head}\n\n... [Truncated {length - 1500} characters to preserve context window] ...\n\n{tail}";
                     }
                 }
-                else if (_history[i].role == "assistant" && _history[i].content.Length > 3000)
+                else if (history[i].role == "assistant" && history[i].content.Length > 3000)
                 {
-                    // Prune Assistant Content (Writes) - CRITICAL for tool discovery
-                    // We allow up to 3000 characters to preserve the Assistant's Semantic Memory (notes, findings, etc.)
-                    string snippet = _history[i].content.Substring(0, 3000);
-                    _history[i].content = $"{snippet}...\n\n(Previous large output/code truncated to prevent context saturation).";
+                    string snippet = history[i].content.Substring(0, 3000);
+                    history[i].content = $"{snippet}...\n\n(Previous large output/code truncated to prevent context saturation).";
                 }
             }
-            // Debug.Log("[Omnisense] Context optimized for tool discovery.");
         }
 
         private string GenerateDiffSummary(MCPToolRequest toolCall, string toolJson)
@@ -1138,20 +1278,41 @@ Do NOT output any other text or execute any tools yet.";
             }
             if (toolCall.method == "scene/set_component_property")
                 return $"<color=#FFFF00>~ Set Property:</color> {toolCall.@params.component}.{toolCall.@params.property} = '{toolCall.@params.value}' on {toolCall.@params.path}";
+            if (toolCall.method == "scene/execute_transactions")
+            {
+                if (toolCall.@params.operations == null || toolCall.@params.operations.Count == 0)
+                {
+                    toolCall.@params.operations = ParseOperationsFallback(toolJson);
+                }
+                
+                if (toolCall.@params.operations == null || toolCall.@params.operations.Count == 0)
+                {
+                    return "<color=#FFFF00>~ Execute Transactions:</color> Empty transaction list.";
+                }
+                var list = new List<string>();
+                foreach (var op in toolCall.@params.operations)
+                {
+                    string act = (!string.IsNullOrEmpty(op.action) ? op.action : op.tool)?.ToLower() ?? "";
+                    if (act == "instantiate_node" || act == "scene/instantiate_node")
+                        list.Add($"  + Instantiate: {op.type} as '{op.name}'");
+                    else if (act == "modify_node" || act == "scene/modify_node")
+                        list.Add($"  ~ Modify Node '{op.path}': set {op.property} = '{op.value}'");
+                    else if (act == "add_component" || act == "addcomponent")
+                        list.Add($"  + Add Component: {op.component ?? op.value} on '{op.path}'");
+                    else if (act == "remove_component" || act == "removecomponent")
+                        list.Add($"  - Remove Component: {op.component ?? op.value} from '{op.path}'");
+                    else if (act == "set_component_property" || act == "scene/set_component_property" || act == "set_property" || act == "setproperty")
+                        list.Add($"  ~ Set Property: {op.component}.{op.property} = '{op.value}' on '{op.path}'");
+                    else if (act == "add_child")
+                        list.Add($"  + Add Child '{op.name}' to '{op.parent ?? op.path}' with components [{(op.components != null ? string.Join(", ", op.components) : op.component)}]");
+                }
+                return $"<color=#FFFF00>~ Execute Transactions (Batched {toolCall.@params.operations.Count} operations):</color>\n{string.Join("\n", list)}";
+            }
             return "Pending changes...";
         }
 
-        private async void ExecuteToolAndResume(MCPToolRequest toolCall, string toolJson, string uiResponse, string model, Action<string, bool> onComplete)
+        private async void ExecuteToolAndResume(MCPToolRequest toolCall, string toolJson, string uiResponse, string model, Action<string, string, bool> onComplete)
         {
-            _stepCount++;
-            if (_stepCount > MAX_STEPS)
-            {
-                string limitMsg = $"\n\n[System Warning]: Maximum tool iterations ({MAX_STEPS}) reached for this turn. To prevent an infinite loop, I have paused execution. Please review my progress and provide further instructions.";
-                onComplete?.Invoke(uiResponse + limitMsg, true);
-                _history.Add(new ChatMessage { role = "assistant", content = "I have reached my tool execution limit for this turn. Pausing for user feedback." });
-                SaveHistory();
-                return;
-            }
 
             // Loop Detection
             string actionSignature = $"{toolCall.method}:{JsonUtility.ToJson(toolCall.@params)}";
@@ -1166,7 +1327,8 @@ Do NOT output any other text or execute any tools yet.";
                     _history.Add(new ChatMessage { role = "user", content = overrideMsg });
                     SaveHistory();
                     
-                    onComplete?.Invoke(uiResponse + "\n\n[System Intervention]: Loop detected. Flushing task queue and requesting summary...", false);
+                    _currentTurnTrace.AppendLine("\n[System Intervention]: Loop detected. Flushing task queue.\n");
+                    onComplete?.Invoke(uiResponse + "\n\n[System Intervention]: Loop detected. Flushing task queue and requesting summary...", _currentTurnTrace.ToString(), false);
                     ExecuteRequest(model, onComplete);
                     return;
                 }
@@ -1175,58 +1337,76 @@ Do NOT output any other text or execute any tools yet.";
             MCPToolRegistry.ToolResult result = null;
             var p = toolCall.@params ?? new MCPToolParams();
 
-            if (toolCall.method == "project/write_file")
-            {
-                result = MCPToolRegistry.WriteFile(p.path, p.content);
-                onComplete?.Invoke(uiResponse + "\n\n[System]: File written. Waiting for Unity to compile...", false);
-            }
-            else if (toolCall.method == "project/edit_file")
-            {
-                result = MCPToolRegistry.EditFile(p.path, p.search_block, p.replace_block);
-                onComplete?.Invoke(uiResponse + "\n\n[System]: File edited. Waiting for Unity to compile...", false);
-            }
-            else if (toolCall.method == "project/list_directory")
-                result = MCPToolRegistry.ListDirectory(p.path);
-            else if (toolCall.method == "project/read_file")
-                result = MCPToolRegistry.ReadFile(p.path);
-            else if (toolCall.method == "project/update_dna")
-                result = MCPToolRegistry.UpdateDNA(p.content);
-            else if (toolCall.method == "project/inspect_asset")
-                result = MCPToolRegistry.InspectAsset(p.path);
-            else if (toolCall.method == "scene/instantiate_node")
-                result = MCPToolRegistry.InstantiateNode(p.type, p.name);
-            else if (toolCall.method == "scene/modify_node")
-                result = MCPToolRegistry.ModifyNode(p.path, p.property, p.value);
-            else if (toolCall.method == "scene/inspect_node")
-                result = MCPToolRegistry.InspectNode(p.path);
-            else if (toolCall.method == "scene/inspect_component")
-                result = MCPToolRegistry.InspectComponent(p.path, p.component);
-            else if (toolCall.method == "scene/set_component_property")
-                result = MCPToolRegistry.SetComponentProperty(p.path, p.component, p.property, p.value);
-            else if (toolCall.method == "editor/read_console")
-                result = MCPToolRegistry.ReadConsole();
-            else if (toolCall.method == "project/create_prefab")
-                result = MCPToolRegistry.CreatePrefab(p.path, p.destinationAssetPath);
-            else if (toolCall.method == "project/create_tag_or_layer")
-                result = MCPToolRegistry.CreateTagOrLayer(p.type, p.name);
-            else if (toolCall.method == "project/list_tags_and_layers")
-                result = MCPToolRegistry.ListTagsAndLayers();
-            else if (toolCall.method == "project/search_assets")
-                result = MCPToolRegistry.SearchAssets(p.query);
-            else if (toolCall.method == "project/inspect_player_settings")
-                result = MCPToolRegistry.InspectPlayerSettings();
-            else if (toolCall.method == "project/list_packages")
-                result = MCPToolRegistry.ListPackages();
-            else if (toolCall.method == "scene/list_all_nodes")
-                result = MCPToolRegistry.ListAllNodes();
-            else if (toolCall.method == "project/inspect_build_settings")
-                result = MCPToolRegistry.InspectBuildSettings();
-            else if (toolCall.method == "project/get_asset_guid")
-                result = MCPToolRegistry.GetAssetGUID(p.path);
-            else
-                result = new MCPToolRegistry.ToolResult { success = false, error = "Unknown tool: " + toolCall.method };
+            _currentTurnTrace.AppendLine($"[Executing Tool...]\n{toolCall.method}: {JsonUtility.ToJson(p)}\n");
 
-            string observation = result.success ? result.observation : $"Error: {result.error}";
+            try
+            {
+                if (toolCall.method == "project/write_file")
+                {
+                    result = MCPToolRegistry.WriteFile(p.path, p.content);
+                    onComplete?.Invoke(uiResponse + "\n\n[System]: File written. Waiting for Unity to compile...", _currentTurnTrace.ToString(), false);
+                }
+                else if (toolCall.method == "project/edit_file")
+                {
+                    result = MCPToolRegistry.EditFile(p.path, p.search_block, p.replace_block);
+                    onComplete?.Invoke(uiResponse + "\n\n[System]: File edited. Waiting for Unity to compile...", _currentTurnTrace.ToString(), false);
+                }
+                else if (toolCall.method == "project/list_directory")
+                    result = MCPToolRegistry.ListDirectory(p.path);
+                else if (toolCall.method == "project/read_file")
+                    result = MCPToolRegistry.ReadFile(p.path);
+                else if (toolCall.method == "project/update_dna")
+                    result = MCPToolRegistry.UpdateDNA(p.content);
+                else if (toolCall.method == "project/inspect_asset")
+                    result = MCPToolRegistry.InspectAsset(p.path);
+                else if (toolCall.method == "scene/instantiate_node")
+                    result = MCPToolRegistry.InstantiateNode(p.type, p.name);
+                else if (toolCall.method == "scene/modify_node")
+                    result = MCPToolRegistry.ModifyNode(p.path, p.property, p.value);
+                else if (toolCall.method == "scene/inspect_node")
+                    result = MCPToolRegistry.InspectNode(p.path);
+                else if (toolCall.method == "scene/inspect_component")
+                    result = MCPToolRegistry.InspectComponent(p.path, p.component);
+                else if (toolCall.method == "scene/set_component_property")
+                    result = MCPToolRegistry.SetComponentProperty(p.path, p.component, p.property, p.value);
+                else if (toolCall.method == "scene/execute_transactions")
+                {
+                    if (p.operations == null || p.operations.Count == 0)
+                    {
+                        p.operations = ParseOperationsFallback(toolJson);
+                    }
+                    result = MCPToolRegistry.ExecuteTransactions(p.operations);
+                }
+                else if (toolCall.method == "editor/read_console")
+                    result = MCPToolRegistry.ReadConsole();
+                else if (toolCall.method == "project/create_prefab")
+                    result = MCPToolRegistry.CreatePrefab(p.path, p.destinationAssetPath);
+                else if (toolCall.method == "project/create_tag_or_layer")
+                    result = MCPToolRegistry.CreateTagOrLayer(p.type, p.name);
+                else if (toolCall.method == "project/list_tags_and_layers")
+                    result = MCPToolRegistry.ListTagsAndLayers();
+                else if (toolCall.method == "project/search_assets")
+                    result = MCPToolRegistry.SearchAssets(p.query);
+                else if (toolCall.method == "project/inspect_player_settings")
+                    result = MCPToolRegistry.InspectPlayerSettings();
+                else if (toolCall.method == "project/list_packages")
+                    result = MCPToolRegistry.ListPackages();
+                else if (toolCall.method == "scene/list_all_nodes")
+                    result = MCPToolRegistry.ListAllNodes();
+                else if (toolCall.method == "project/inspect_build_settings")
+                    result = MCPToolRegistry.InspectBuildSettings();
+                else if (toolCall.method == "project/get_asset_guid")
+                    result = MCPToolRegistry.GetAssetGUID(p.path);
+                else
+                    result = new MCPToolRegistry.ToolResult { success = false, error = "Unknown tool: " + toolCall.method };
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"[Omnisense] Unhandled exception during tool execution '{toolCall.method}': {ex.Message}\n{ex.StackTrace}");
+                result = new MCPToolRegistry.ToolResult { success = false, error = $"Tool Execution Exception: {ex.Message}" };
+            }
+
+            string observation = result.success ? result.observation : $"Error: {(string.IsNullOrEmpty(result.error) ? "An unknown error occurred during tool execution." : result.error)}";
             Debug.Log($"[Omnisense] Tool Result: {(result.success ? "Success" : "Failed")}. Observation added to history.");
 
             // ── CONTEXT CONDENSATION: Log what was touched ────────────────────────────
@@ -1254,6 +1434,8 @@ Do NOT output any other text or execute any tools yet.";
                         logEntry = $"Inspected component '{q.component}' on: '{q.path}'"; break;
                     case "scene/set_component_property":
                         logEntry = $"Set '{q.component}.{q.property}' = '{q.value}' on: '{q.path}'"; break;
+                    case "scene/execute_transactions":
+                        logEntry = $"Executed batched transactions: {q.operations?.Count ?? 0} operations"; break;
                     case "project/create_prefab":
                         logEntry = $"Created prefab: '{q.destinationAssetPath}' from '{q.path}'"; break;
                     case "project/inspect_asset":
@@ -1277,22 +1459,25 @@ Do NOT output any other text or execute any tools yet.";
 
             _history.Add(new ChatMessage { role = "user", content = $"[Observation]\n{observation}" });
             SaveHistory();
-            onComplete?.Invoke($"[Observation]\n{observation}", false);
+            _currentTurnTrace.AppendLine($"[Observation]\n{observation}\n");
+            onComplete?.Invoke($"[Observation]\n{observation}", _currentTurnTrace.ToString(), false);
 
             
             if (toolCall.method != "project/write_file" && toolCall.method != "project/edit_file") {
-                onComplete?.Invoke(uiResponse + "\n\n[System]: Tool executed. Analyzing results...", false);
+                onComplete?.Invoke(uiResponse + "\n\n[System]: Tool executed. Analyzing results...", _currentTurnTrace.ToString(), false);
             }
             
             bool wasCompiling = UnityEditor.EditorApplication.isCompiling || UnityEditor.EditorApplication.isUpdating;
             if (wasCompiling)
             {
-                onComplete?.Invoke(uiResponse + "\n\n[System]: Waiting for Unity to finish compiling...", false);
+                _currentTurnTrace.AppendLine("[System]: Waiting for Unity to finish compiling...");
+                onComplete?.Invoke(uiResponse + "\n\n[System]: Waiting for Unity to finish compiling...", _currentTurnTrace.ToString(), false);
                 while (UnityEditor.EditorApplication.isCompiling || UnityEditor.EditorApplication.isUpdating)
                 {
                     await System.Threading.Tasks.Task.Delay(500);
                 }
-                onComplete?.Invoke(uiResponse + "\n\n[System]: Compilation finished. Resuming execution...", false);
+                _currentTurnTrace.AppendLine("[System]: Compilation finished. Resuming execution...");
+                onComplete?.Invoke(uiResponse + "\n\n[System]: Compilation finished. Resuming execution...", _currentTurnTrace.ToString(), false);
             }
 
             // Break the synchronous closure chain
@@ -1381,6 +1566,58 @@ Do NOT output any other text or execute any tools yet.";
             public string replace_block;
             public string destinationAssetPath;
             public string query;
+            public List<TransactionOperation> operations;
+        }
+
+        public static List<TransactionOperation> ParseOperationsFallback(string rawJson)
+        {
+            var list = new List<TransactionOperation>();
+            try
+            {
+                var match = Regex.Match(rawJson, @"""operations""\s*:\s*\[([\s\S]*?)\]", RegexOptions.IgnoreCase);
+                if (!match.Success) return list;
+
+                string arrayContent = match.Groups[1].Value;
+                var objMatches = Regex.Matches(arrayContent, @"\{([\s\S]*?)\}");
+                foreach (Match objMatch in objMatches)
+                {
+                    string objJson = objMatch.Value;
+                    var op = new TransactionOperation();
+                    op.action = ExtractJsonStringField(objJson, "action") ?? ExtractJsonStringField(objJson, "tool");
+                    op.tool = ExtractJsonStringField(objJson, "tool");
+                    op.path = ExtractJsonStringField(objJson, "path");
+                    op.parent = ExtractJsonStringField(objJson, "parent");
+                    op.name = ExtractJsonStringField(objJson, "name");
+                    op.property = ExtractJsonStringField(objJson, "property");
+                    op.value = ExtractJsonStringField(objJson, "value");
+                    op.component = ExtractJsonStringField(objJson, "component");
+                    op.type = ExtractJsonStringField(objJson, "type");
+                    
+                    var compMatch = Regex.Match(objJson, @"""components""\s*:\s*\[([\s\S]*?)\]", RegexOptions.IgnoreCase);
+                    if (compMatch.Success)
+                    {
+                        op.components = new List<string>();
+                        var comps = Regex.Matches(compMatch.Groups[1].Value, @"""([^""]+)""");
+                        foreach (Match c in comps)
+                        {
+                            op.components.Add(c.Groups[1].Value);
+                        }
+                    }
+                    
+                    list.Add(op);
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[Omnisense] Fallback operations parser failed: {ex.Message}");
+            }
+            return list;
+        }
+
+        private static string ExtractJsonStringField(string json, string fieldName)
+        {
+            var match = Regex.Match(json, @"""" + fieldName + @"""" + @"\s*:\s*""((?:[^""\\]|\\.)*)""", RegexOptions.IgnoreCase);
+            return match.Success ? match.Groups[1].Value : null;
         }
     }
 }
