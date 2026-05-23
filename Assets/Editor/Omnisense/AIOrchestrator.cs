@@ -73,6 +73,7 @@ namespace Omnisense
         private string _lastWorkerResponse = "";
         private System.Text.StringBuilder _currentTurnTrace = new System.Text.StringBuilder();
         private int _consecutiveManagerRejections = 0;
+        private string _routingDecision = "planner";
 
         [Serializable]
         public class HistoryWrapper { public List<ChatMessage> list; }
@@ -93,6 +94,7 @@ namespace Omnisense
             public List<string> turnContextLog;
             public List<string> persistentScratchpad;
             public int consecutiveManagerRejections;
+            public string routingDecision;
         }
 
         private void SaveState()
@@ -111,7 +113,8 @@ namespace Omnisense
                 actionHistory = _actionHistory,
                 turnContextLog = _turnContextLog,
                 persistentScratchpad = _persistentScratchpad,
-                consecutiveManagerRejections = _consecutiveManagerRejections
+                consecutiveManagerRejections = _consecutiveManagerRejections,
+                routingDecision = _routingDecision
             };
             EditorPrefs.SetString("Omnisense_AI_State", JsonUtility.ToJson(state));
         }
@@ -139,6 +142,7 @@ namespace Omnisense
                         _turnContextLog = state.turnContextLog ?? new List<string>();
                         _persistentScratchpad = state.persistentScratchpad ?? new List<string>();
                         _consecutiveManagerRejections = state.consecutiveManagerRejections;
+                        _routingDecision = state.routingDecision ?? "planner";
                     }
                 }
                 catch (Exception e)
@@ -200,7 +204,7 @@ namespace Omnisense
 
             // Initialize with correct System Prompt
             string model = EditorPrefs.GetString("Omnisense_SelectedModel", "gpt-4o");
-            string promptToUse = model == "self-hosted" ? SYSTEM_PROMPT_LITE : SYSTEM_PROMPT;
+            string promptToUse = model == "self-hosted" ? SYSTEM_PROMPT_LITE : GENERIC_WORKER_PROMPT;
             _history.Add(new ChatMessage { role = "system", content = promptToUse });
 
             // Re-bootstrap DNA
@@ -245,57 +249,70 @@ namespace Omnisense
             LoadState();
         }
 
-        private const string SYSTEM_PROMPT = @"You are the Omnisense Senior Unity Architect, an elite autonomous developer agent. 
-Your goal is not just to execute commands, but to deliver FULLY FUNCTIONAL features.
+        private const string PLANNER_SYSTEM_PROMPT = @"You are the Omnisense Senior Planner.
+Analyze the user's latest request and plan a series of sub-tasks to achieve it.
+- If the user explicitly asks to CREATE, MODIFY, INSPECT, or DELETE files/scripts/objects, you MUST set 'requires_tools' to true and provide a list of granular, concrete sub-tasks.
+- If the user is asking a general conceptual question or advice, set 'requires_tools' to false.
+
+Output ONLY a valid JSON object in this exact format:
+{
+  ""intent"": ""project_modification"" | ""conceptual_q_and_a"",
+  ""requires_tools"": true | false,
+  ""tasks"": [""Task 1 description"", ""Task 2 description""]
+}
+Do NOT output any other text or execute any tools.";
+
+        private const string MANAGER_SYSTEM_PROMPT = @"You are the Omnisense Senior AI Architect & Router.
+Your job is to manage the execution of the user's overall goal.
+You review the conversation history and the active sub-task.
+
+### DIRECTIVES:
+1. **Routing**: Determine which specialized agent is best equipped to handle the CURRENT sub-task:
+   - If the task involves creating, editing, or positioning UI components, Canvas, EventSystem, Layout Groups, Texts, Panels, or Buttons, route to 'ui_agent'.
+   - If the task is about standard C# scripting, logic, folders, tags/layers, asset lookups, or general Unity setup, route to 'generic_agent'.
+   - If the overall goal is fully accomplished, route to 'end'.
+2. **Quality Audit**: Review the worker's latest response.
+   - If the worker successfully finished the sub-task, approve it by setting 'is_complete' to true.
+   - If the worker left things incomplete or there are active compilation errors, reject it by setting 'is_complete' to false and provide feedback.
+
+Output ONLY a valid JSON object in this exact format:
+{
+  ""routing"": ""ui_agent"" | ""generic_agent"" | ""end"",
+  ""is_complete"": true | false,
+  ""feedback"": ""Your audit feedback or routing justification""
+}";
+
+        private const string UI_SPECIALIST_PROMPT = @"You are the Omnisense UI Specialist Agent, an expert in Unity GUI, Canvas Layouts, and TextMeshPro.
+Your goal is to build responsive, modern, and visually stunning user interfaces.
+
+### CRITICAL RULES:
+1. **Ensure Canvas Baseline**: Never leave canvas/EventSystem missing. Use 'ui/setup_canvas' first.
+2. **Component Hierarchy**: Make sure panels, buttons, and texts are correctly parented.
+3. **Advanced UI Tools**: Proactively use your high-level UI tools to execute tasks in one turn:
+   - 'ui/setup_canvas' (instantiates Canvas and EventSystem)
+   - 'ui/create_panel' (creates container panels with default background)
+   - 'ui/create_text' (creates aligned TextMeshPro / standard text)
+   - 'ui/create_button' (creates beautiful buttons with text child)
+   - 'ui/setup_layout_group' (sets up Vertical/Horizontal/Grid layouts with content size fitters)
+4. **Visual Excellence**: Choose harmonious dark theme or glowing primary colors.
+5. **No Placeholders**: Deliver fully functional UI components, not raw mocks.
+
+### OPERATIONAL LOOP: ReAct
+1. **Thought & Action**: Think step-by-step in a <thought> block, then immediately output the ```mcp_json tool block.
+2. If you are completely finished with your task, summarize your progress and output plain text without any tool call to signal completion.";
+
+        private const string GENERIC_WORKER_PROMPT = @"You are the Omnisense Senior Unity Architect, an elite autonomous developer agent.
+Your goal is to write clean, compiled, and functional C# scripts, logic, and general Unity concerns.
 
 ### MANDATE: Second-Order Thinking
-When a user makes a request, do not just fulfill the explicit text. Identify and resolve all implicit technical dependencies:
-1. **Component Dependencies**: If you write a script that uses `GetComponent<Rigidbody>()`, you MUST autonomously attach a Rigidbody to the object.
-2. **Scene Wiring**: If you add a script with a serialized field (like `public Transform target`), you MUST use `scene/set_component_property` to find a logical target in the scene and wire it up.
-3. **Environment Validation**: After writing code, you MUST use `editor/read_console` to check for compilation errors. If errors exist, you MUST fix them immediately without being asked.
-4. **Project DNA**: You have a long-term memory file called `.omnisense_dna.md`. If you learn something new about the project's architecture, folder structure, or naming conventions, you MUST use `project/update_dna` to record it.
+When editing or creating scripts/objects:
+1. **Component Dependencies**: If you write a script using Rigidbody, make sure it is attached.
+2. **Environment Validation**: After writing code, you MUST use 'editor/read_console' to check for compilation errors. If errors exist, you MUST fix them immediately.
+3. **Project DNA**: Conform to the persistent rules in '.omnisense_dna.md'.
 
-### OPERATIONAL LOOP: ReAct + Plan
-1. **Plan & Act**: Output a `<thought>` block to plan your steps, then IMMEDIATELY output the ```mcp_json tool block in the SAME message. NEVER stop generating after a thought block.
-2. **Observe**: Review the result of your tool call.
-4. **Reflect**: Before telling the user you are done, ask yourself: ""Is this object in a broken state? Are any references null?"" Fix them if needed.
-5. **Proactivity**: DO NOT ask for permission to investigate or fix issues. If you need to read a file, inspect a node, or write code to solve the user's problem, DO IT IMMEDIATELY using the tools. Never stop midway to ask if you should continue.
-
-You have access to the following MCP tools. To use a tool, output exactly this format:
-```mcp_json
-{
-    ""method"": ""TOOL_NAME"",
-    ""params"": {
-        ""key"": ""value""
-    }
-}
-```
-
-Available Tools:
-1. project/list_directory (params: ""path"") - Lists files.
-2. project/read_file (params: ""path"") - Reads the contents of a text file.
-3. project/update_dna (params: ""content"") - Updates the .omnisense_dna.md file. Use this to persist architectural rules, naming conventions, and project knowledge.
-4. project/inspect_asset (params: ""path"") - Reads metadata/properties of Prefabs, Materials, etc.
-5. project/write_file (params: ""path"", ""content"") - Creates a NEW file. DO NOT use this for modifying existing files unless you are completely rewriting them.
-6. project/edit_file (params: ""path"", ""search_block"", ""replace_block"") - Fast O(1) editing for existing files. Use this to modify existing code. 'search_block' MUST be an exact string match (including whitespace) of the code you want to replace.
-7. project/create_prefab (params: ""path"", ""destinationAssetPath"") - Converts a scene GameObject into a project asset. 'path' is the scene path, 'destinationAssetPath' is the save location (e.g., ""Assets/Prefabs/Player.prefab"").
-8. project/create_tag_or_layer (params: ""type"", ""name"") - Creates a new Tag or Layer in Project Settings. 'type' is ""Tag"" or ""Layer"".
-9. scene/instantiate_node (params: ""type"", ""name"") - Creates a GameObject. 'type' can be a primitive (Cube, Sphere, Capsule, Cylinder, Plane, Quad) or 'GameObject' for an empty object.
-10. scene/modify_node (params: ""path"", ""property"", ""value"") - Edits a Scene GameObject OR a Project Prefab (e.g. ""Assets/Enemy.prefab/Waypoints""). Supported properties: name, position (x,y,z), add_child (name), add_component (Type), remove_component (Type), tag (string), layer (string).
-11. scene/inspect_node (params: ""path"") - Returns an object's or prefab's components.
-12. scene/set_component_property (params: ""path"", ""component"", ""property"", ""value"") - Sets a property on a component (supports both GameObjects and Prefabs). For standard properties (float, bool, string), pass the value directly (e.g. '5', 'true'). **For Arrays or Lists (e.g. List<Transform>, Transform[]), pass a comma-separated string of deep object paths (e.g. 'Assets/Prefab/Enemy.prefab/Waypoints/waypoint_1, Assets/Prefab/Enemy.prefab/Waypoints/waypoint_2'). NEVER use Unity-internal paths like 'property.Array.size' or 'property.Array.data[0]'.**
-13. editor/read_console (params: none) - Returns the latest 30 warnings/errors.
-14. project/list_tags_and_layers (params: none) - Returns a list of all Tags and Layers defined in the project. Use this before creating or assigning tags to verify existence.
-15. project/search_assets (params: ""query"") - Uses AssetDatabase.FindAssets to find assets by name, type (e.g. ""t:Prefab""), or label.
-16. project/inspect_player_settings (params: none) - Returns key project settings like Bundle ID, Product Name, and Scripting Define Symbols.
-17. project/list_packages (params: none) - Returns the list of installed packages from manifest.json. Use this to check for URP, ProBuilder, etc.
-18. scene/list_all_nodes (params: none) - Returns a list of all root GameObjects in the active scene.
-19. project/inspect_build_settings (params: none) - Returns the target platform and the list of scenes currently included in the Build Settings.
-20. project/get_asset_guid (params: ""path"") - Returns the unique Unity GUID for an asset path. Use this for stable asset tracking.
-21. scene/inspect_component (params: ""path"", ""component"") - Returns all public properties and fields of a specific component. Use this to discover exact property names (e.g. bodyType) before using set_component_property.
-22. scene/execute_transactions (params: ""operations"" as a list of objects containing ""action"" [e.g. ""add_child"", ""add_component"", ""set_component_property"", ""instantiate_node""], ""path"" / ""parent"", ""name"", ""component"", ""components"" [list of strings], ""property"", ""value"") - Executes multiple scene and prefab modification operations in a single fast network turn.
-
-Wait for the [Observation] from the system ONLY AFTER you have output a tool block.";
+### OPERATIONAL LOOP: ReAct
+1. **Thought & Action**: Output a <thought> block to plan your steps, then IMMEDIATELY output the ```mcp_json tool block.
+2. If you are completely finished with your task, summarize your progress and output plain text without any tool call to signal completion.";
 
         private const string SYSTEM_PROMPT_LITE = @"You are the Omnisense Assistant, a helpful AI developer agent.
 Your goal is to execute commands to help the user. Think step by step using a <thought> block, and THEN IMMEDIATELY output your tool call in the same message. NEVER stop generating after a thought block.
@@ -317,13 +334,12 @@ Available Tools:
 3. project/write_file (params: ""path"", ""content"") - Creates a NEW file.
 4. project/edit_file (params: ""path"", ""search_block"", ""replace_block"") - Edits existing files. Use exact string matches for search_block.
 5. scene/instantiate_node (params: ""type"", ""name"") - Creates a GameObject.
-6. scene/modify_node (params: ""path"", ""property"", ""value"") - Edits a Scene GameObject OR a Project Prefab (e.g. ""Assets/Enemy.prefab/Waypoints""). Supported properties: name, position (x,y,z), add_child (name), add_component (Type), remove_component (Type), tag (string), layer (string).
+6. scene/modify_node (params: ""path"", ""property"", ""value"") - Edits a Scene GameObject OR a Project Prefab.
 7. scene/inspect_node (params: ""path"") - Returns an object/prefab's components.
 8. editor/read_console (params: none) - Returns the latest warnings/errors.
 9. scene/list_all_nodes (params: none) - Returns a list of all root GameObjects.
 10. scene/inspect_component (params: ""path"", ""component"") - Lists properties of a specific component.
-11. scene/set_component_property (params: ""path"", ""component"", ""property"", ""value"") - Sets a property on a component. For Arrays or Lists (e.g. List<Transform>), pass a comma-separated string of deep object paths (e.g. 'Assets/Prefab/Enemy.prefab/Waypoints/waypoint_1, Assets/Prefab/Enemy.prefab/Waypoints/waypoint_2'). NEVER use .Array.size or .Array.data[i] notation.
-12. scene/execute_transactions (params: ""operations"" as a list of objects containing ""action"" [e.g. ""add_child"", ""add_component"", ""set_component_property"", ""instantiate_node""], ""path"" / ""parent"", ""name"", ""component"", ""components"" [list of strings], ""property"", ""value"") - Executes multiple scene/prefab changes in a single fast network turn.";
+11. scene/set_component_property (params: ""path"", ""component"", ""property"", ""value"") - Sets a property on a component.";
 
         public void ProcessPrompt(string prompt, string model, string turnId, Action<string, string, bool> onComplete)
         {
@@ -342,93 +358,87 @@ Available Tools:
             _turnContextLog.Clear();
             _lastWorkerResponse = "";
             _consecutiveManagerRejections = 0;
+            _routingDecision = "planner";
             OmnisenseUndoManager.StartTurn(turnId);
 
-            // ─── STATE HANDOVER (SCRATCHPAD) ────────────────────────────────────────────────
-            // Instead of flushing the history, we maintain a persistent scratchpad
-            // and keep the history intact for the Tiered Sliding Window to manage.
-            string promptToUse = model == "self-hosted" ? SYSTEM_PROMPT_LITE : SYSTEM_PROMPT;
-            
-            // Clean up old system prompts and DNA to refresh them at the top
+            // Persistently add the user's prompt so the Worker and Manager can see the full context
+            _history.Add(new ChatMessage { role = "user", content = prompt });
+            SaveHistory();
+
+            onComplete?.Invoke("[System]: Analyzing request and classifying intent...", _currentTurnTrace.ToString(), false);
+            ExecuteRequest(model, onComplete);
+        }
+
+        private void RefreshSystemContext(string model)
+        {
             _history.RemoveAll(m => m.role == "system");
 
-            // Re-inject core system prompt
-            _history.Insert(0, new ChatMessage { role = "system", content = promptToUse });
+            string rolePrompt = "";
+            if (_routingDecision == "planner")
+            {
+                rolePrompt = PLANNER_SYSTEM_PROMPT;
+            }
+            else if (_routingDecision == "manager")
+            {
+                rolePrompt = MANAGER_SYSTEM_PROMPT;
+            }
+            else if (_routingDecision == "ui")
+            {
+                rolePrompt = UI_SPECIALIST_PROMPT;
+            }
+            else
+            {
+                rolePrompt = model == "self-hosted" ? SYSTEM_PROMPT_LITE : GENERIC_WORKER_PROMPT;
+            }
 
-            // Re-inject Project DNA if it exists
+            _history.Insert(0, new ChatMessage { role = "system", content = rolePrompt });
+
             try {
                 string dnaPath = System.IO.Path.Combine(Application.dataPath, "..", ".omnisense_dna.md");
                 if (System.IO.File.Exists(dnaPath)) {
                     string dnaContent = System.IO.File.ReadAllText(dnaPath);
                     _history.Insert(1, new ChatMessage { role = "system", content = $"[PROJECT DNA]\nThis is the persistent memory of this project. Conform to these architectural rules:\n\n{dnaContent}" });
-                    Debug.Log($"[Omnisense-Diagnostics] Project DNA loaded ({dnaContent.Length} chars).");
                 }
             } catch { }
 
-            // Inject the State Scratchpad (derived from recent tool actions)
             if (_persistentScratchpad.Count > 0)
             {
                 string stateBanner = "[CURRENT ENVIRONMENT STATE]\n";
-                // Only take the last 15 unique files touched to prevent bloat
                 foreach (var item in _persistentScratchpad.Distinct().Reverse().Take(15).Reverse())
                 {
                     stateBanner += $"- {item}\n";
                 }
                 _history.Insert(2, new ChatMessage { role = "system", content = stateBanner });
             }
-            
-            Debug.Log($"[Omnisense-Diagnostics] Context refreshed for new turn. History retained: {_history.Count} messages.");
-            // ─────────────────────────────────────────────────────────────────────────────
-
-            // Route to Planner instead of executing directly
-            _isPlanning = true;
-            _pendingTasks.Clear();
-
-            // Persistently add the user's prompt so the Worker and Manager can see the full context
-            _history.Add(new ChatMessage { role = "user", content = prompt });
-            SaveHistory();
-
-            string plannerInstruction = @"[SYSTEM PLANNER INSTRUCTION]
-Evaluate the intent of the user's latest request in the context of the conversation history.
-- If the user explicitly asks to CREATE, MODIFY, INSPECT, or DELETE files/scripts/objects, you MUST set 'requires_tools' to true and provide an execution plan.
-- If the user is ONLY asking a general question or asking for advice, set 'requires_tools' to false.
-- CRITICAL: If the user's request is a continuation (e.g., 'yes, please do', 'go ahead', 'do it'), read the previous assistant message. If they are approving the creation of files or execution of actions, 'requires_tools' MUST be true.
-
-Output ONLY a valid JSON object in this exact format:
-{
-  ""intent"": ""project_modification"",
-  ""requires_tools"": true,
-  ""tasks"": [""Task 1 description""]
-}
-Do NOT output any other text or execute any tools yet.";
-
-            // Construct isolated history list for the Planner call
-            var plannerHistory = new List<ChatMessage>(_history);
-            plannerHistory.Add(new ChatMessage { role = "system", content = plannerInstruction });
-
-            onComplete?.Invoke("[System]: Analyzing request and classifying intent...", _currentTurnTrace.ToString(), false);
-            ExecuteRequest(model, onComplete, plannerHistory);
         }
-
 
         private void StartNextTask(string model, Action<string, string, bool> onComplete)
         {
             if (_pendingTasks.Count == 0)
             {
                 Debug.Log("[Omnisense-Orchestration] StartNextTask called but queue is empty.");
+                _routingDecision = "end";
                 onComplete?.Invoke("[System]: All tasks in the execution plan have been successfully completed.", _currentTurnTrace.ToString(), true);
                 return;
             }
 
             _currentTask = _pendingTasks.Dequeue();
-            _stepCount = 0; // Reset step count budget for the new sub-task
+            _stepCount = 0;
+            _lastWorkerResponse = "";
             Debug.Log($"[Omnisense-Orchestration] Starting Sub-Task: {_currentTask}");
-            _history.Add(new ChatMessage { role = "user", content = $"[Sub-Task]: {_currentTask}\n\nPlease execute this step using your MCP tools. If you are finished with this sub-task, summarize your work." });
+            _history.Add(new ChatMessage { role = "user", content = $"[Sub-Task]: {_currentTask}" });
             SaveHistory();
             
             string taskHeader = $"\n<color=#00FFFF><b>[Executing Task]:</b> {_currentTask}</color>\n";
             _currentTurnTrace.AppendLine(taskHeader);
             onComplete?.Invoke(taskHeader, _currentTurnTrace.ToString(), false);
+
+            _routingDecision = "manager";
+            string managerRoutePrompt = $"Review the current task: '{_currentTask}'. Which specialized agent is best suited to start this task? Route to 'ui_agent' or 'generic_agent'. Output ONLY valid JSON: {{\"routing\": \"ui_agent\" | \"generic_agent\", \"is_complete\": false, \"feedback\": \"Justification for routing\"}}";
+            
+            _history.Add(new ChatMessage { role = "user", content = managerRoutePrompt });
+            SaveHistory();
+
             ExecuteRequest(model, onComplete);
         }
 
@@ -449,9 +459,13 @@ Do NOT output any other text or execute any tools yet.";
                 _history.Add(new ChatMessage { role = "assistant", content = "I have reached the execution limit for this sub-task. Pausing for user feedback." });
                 SaveHistory();
                 
-                // Clear pending state
                 EditorPrefs.SetBool("Omnisense_AI_PendingResume", false);
                 return;
+            }
+
+            if (customHistory == null)
+            {
+                RefreshSystemContext(model);
             }
 
             List<ChatMessage> activeHistory = customHistory ?? _history;
@@ -824,21 +838,22 @@ Do NOT output any other text or execute any tools yet.";
 
         public event Action<string, Action<bool>> OnPendingAction;
 
+        [Serializable]
+        public class ManagerDecision
+        {
+            public string routing;
+            public bool is_complete;
+            public string feedback;
+        }
+
         private void HandleResponse(string response, string model, Action<string, string, bool> onComplete)
         {
-            if (_isPlanning)
+            if (_routingDecision == "planner")
             {
-                Debug.Log($"[Omnisense-Orchestration] Planning Response Received. Parsing Task List...");
-                _isPlanning = false;
-                
-                // Remove the Planner prompt to keep history clean for the worker
-                if (_history.Count > 0 && _history[_history.Count - 1].content.StartsWith("[SYSTEM PLANNER INSTRUCTION]"))
-                {
-                    _history.RemoveAt(_history.Count - 1);
-                }
+                Debug.Log($"[Omnisense-Orchestration] Planner Response Received. Parsing Task List...");
+                _currentTurnTrace.AppendLine("[System]: Planner Response Received. Parsing Task List...");
 
-                _currentTurnTrace.AppendLine("[System]: Planning Response Received. Parsing Task List...");
-
+                bool requiresTools = true;
                 try 
                 {
                     string json = response.Replace("```json", "").Replace("```", "").Trim();
@@ -850,10 +865,12 @@ Do NOT output any other text or execute any tools yet.";
                         var plan = JsonUtility.FromJson<PlannerResponse>(json);
                         if (plan != null) 
                         {
-                            if (!plan.requires_tools && (plan.intent == "conceptual_q_and_a" || plan.intent == "general_knowledge"))
+                            requiresTools = plan.requires_tools;
+                            if (!requiresTools && (plan.intent == "conceptual_q_and_a" || plan.intent == "general_knowledge"))
                             {
                                 Debug.Log($"[Omnisense-Orchestration] Intent classified as conceptual. Bypassing tool loop.");
                                 _isConceptualTurn = true;
+                                _routingDecision = "end";
                                 _history.Add(new ChatMessage { role = "assistant", content = "<b>[Manager] Classified as General Knowledge. Bypassing tool execution.</b>" });
                                 SaveHistory();
                                 
@@ -889,24 +906,20 @@ Do NOT output any other text or execute any tools yet.";
 
                 _currentTurnTrace.AppendLine(planUi);
 
+                _routingDecision = "manager";
                 StartNextTask(model, onComplete);
                 return;
             }
 
-            if (_isManagerEvaluating)
+            if (_routingDecision == "manager")
             {
-                _isManagerEvaluating = false;
-                Debug.Log("[Omnisense-Orchestration] Manager Audit Response Received. Evaluating results...");
-                
-                // Remove the Manager prompt from history to keep it clean
-                if (_history.Count > 0 && _history[_history.Count - 1].content.StartsWith("MANAGER AUDIT:"))
-                {
-                    _history.RemoveAt(_history.Count - 1);
-                }
+                Debug.Log("[Omnisense-Orchestration] Manager Response Received. Evaluating routing/completion...");
+                _currentTurnTrace.AppendLine("[System]: Manager Response Received. Evaluating routing/completion...");
 
-                bool isComplete = true;
-                string feedback = "Completed.";
-                
+                string nextRouting = "generic";
+                bool isComplete = false;
+                string feedback = "";
+
                 try 
                 {
                     string json = response.Replace("```json", "").Replace("```", "").Trim();
@@ -915,20 +928,21 @@ Do NOT output any other text or execute any tools yet.";
                     if (startIdx >= 0 && endIdx >= startIdx) 
                     {
                         json = json.Substring(startIdx, endIdx - startIdx + 1);
-                        var eval = JsonUtility.FromJson<ManagerEvaluation>(json);
+                        var eval = JsonUtility.FromJson<ManagerDecision>(json);
                         if (eval != null) 
                         {
+                            nextRouting = eval.routing ?? "generic";
                             isComplete = eval.is_complete;
-                            feedback = eval.feedback;
+                            feedback = eval.feedback ?? "";
                         }
                     }
                 } 
                 catch 
                 {
-                    Debug.LogWarning("[Omnisense] Failed to parse Manager Evaluation. Defaulting to true.");
+                    Debug.LogWarning("[Omnisense] Failed to parse Manager Decision. Defaulting to standard routing.");
                 }
 
-                if (isComplete)
+                if (isComplete || nextRouting == "end")
                 {
                     Debug.Log("[Omnisense-Orchestration] Manager Approved Task Completion.");
                     _turnToolCount = 0;
@@ -938,21 +952,15 @@ Do NOT output any other text or execute any tools yet.";
                     
                     _history.Add(new ChatMessage { role = "assistant", content = $"<thought>Manager approved sub-task completion.</thought> {feedback}" });
 
-                    // ── CONTEXT CONDENSATION ──────────────────────────────────────────────────
-                    // Synthesize a Turn Summary from the tool context log and inject it as a
-                    // persistent system message. This survives the per-turn context flush,
-                    // preventing amnesia about file paths and objects touched in previous turns.
                     if (_turnContextLog.Count > 0)
                     {
-                        var sb = new StringBuilder();
+                        var sb = new System.Text.StringBuilder();
                         sb.AppendLine($"[Turn Summary] Task: '{_currentTask}'");
                         sb.AppendLine("The agent successfully completed the following actions:");
                         foreach (var entry in _turnContextLog.Distinct())
                             sb.AppendLine($"  - {entry}");
                         _history.Add(new ChatMessage { role = "system", content = sb.ToString().Trim() });
-                        Debug.Log($"[Omnisense] Context Condensation: Turn Summary injected ({_turnContextLog.Count} actions logged).");
                     }
-                    // ─────────────────────────────────────────────────────────────────────────
 
                     SaveHistory();
                     
@@ -970,39 +978,60 @@ Do NOT output any other text or execute any tools yet.";
                     else
                     {
                         Debug.Log("[Omnisense-Orchestration] All tasks approved. Loop terminating.");
+                        _routingDecision = "end";
                         string finalResult = !string.IsNullOrEmpty(_lastWorkerResponse) 
                             ? $"{_lastWorkerResponse}\n\n<color=#00FF00><b>[Manager Approved]: All tasks complete.</b></color>\n{feedback}" 
                             : $"<color=#00FF00><b>[Manager Approved]: All tasks complete.</b></color>\n{feedback}";
                         
                         _currentTurnTrace.AppendLine($"[Manager Approved]: All tasks complete. {feedback}");
                         onComplete?.Invoke(finalResult, _currentTurnTrace.ToString(), true);
+                        
+                        EditorPrefs.SetBool("Omnisense_AI_PendingResume", false);
                     }
                 }
                 else
                 {
-                    _consecutiveManagerRejections++;
-                    Debug.Log($"[Omnisense-Orchestration] Manager REJECTED Completion. Feedback: {feedback} (Consecutive Rejections: {_consecutiveManagerRejections})");
-                    
-                    if (_consecutiveManagerRejections >= 3)
-                    {
-                        _pendingTasks.Clear();
-                        _consecutiveManagerRejections = 0;
-                        string limitMsg = "\n\n[System Intervention]: The Manager has rejected this task 3 times consecutively. Paused to prevent death loop. Review feedback and guide the agent manually.";
-                        _currentTurnTrace.AppendLine(limitMsg);
-                        onComplete?.Invoke($"<color=#FF5555><b>[System Intervention]:</b></color> The Manager has rejected this task 3 times consecutively. Paused to prevent a death loop. Review feedback and guide the agent manually.\n\nFeedback: {feedback}", _currentTurnTrace.ToString(), true);
-                        _history.Add(new ChatMessage { role = "assistant", content = "Manager has rejected this task 3 times consecutively. Pausing for user feedback." });
-                        SaveHistory();
-                        return;
-                    }
+                    bool isInitialRouting = string.IsNullOrEmpty(_lastWorkerResponse);
 
-                    _history.Add(new ChatMessage { role = "user", content = $"[Manager Audit Failed]: The Manager detected that the task is incomplete. Feedback: {feedback}\n\nSYSTEM DIRECTIVE: Review the feedback above, plan how to resolve the missing requirements, and immediately use your edit/write tools to apply the changes to the scripts. Do not stop at reading or verifying; you must write the required code edits to complete the sub-task." });
-                    SaveHistory();
-                    
-                    _currentTurnTrace.AppendLine($"[Manager Rejected Sub-Task]: {feedback}");
-                    onComplete?.Invoke($"<color=#FF5555><b>[Manager Rejected]:</b></color> {feedback}\nResuming execution...", _currentTurnTrace.ToString(), false);
-                    ExecuteRequest(model, onComplete);
+                    if (isInitialRouting)
+                    {
+                        _routingDecision = nextRouting == "ui_agent" ? "ui" : "generic";
+                        Debug.Log($"[Omnisense-Orchestration] Manager routed initial task to: {_routingDecision}");
+                        
+                        string routeMsg = $"<b>[Manager] Task routed to specialized {(_routingDecision == "ui" ? "UI Specialist" : "Generic Architect")} Agent.</b>";
+                        _currentTurnTrace.AppendLine(routeMsg);
+                        onComplete?.Invoke(routeMsg, _currentTurnTrace.ToString(), false);
+                        ExecuteRequest(model, onComplete);
+                    }
+                    else
+                    {
+                        _consecutiveManagerRejections++;
+                        Debug.Log($"[Omnisense-Orchestration] Manager REJECTED Completion. Feedback: {feedback} (Rejections: {_consecutiveManagerRejections})");
+                        
+                        if (_consecutiveManagerRejections >= 3)
+                        {
+                            _pendingTasks.Clear();
+                            _consecutiveManagerRejections = 0;
+                            _routingDecision = "end";
+                            EditorPrefs.SetBool("Omnisense_AI_PendingResume", false);
+                            
+                            string limitMsg = "\n\n[System Intervention]: The Manager has rejected this task 3 times consecutively. Paused to prevent death loop. Review feedback and guide the agent manually.";
+                            _currentTurnTrace.AppendLine(limitMsg);
+                            onComplete?.Invoke($"<color=#FF5555><b>[System Intervention]:</b></color> The Manager has rejected this task 3 times consecutively. Paused to prevent a death loop. Review feedback and guide the agent manually.\n\nFeedback: {feedback}", _currentTurnTrace.ToString(), true);
+                            _history.Add(new ChatMessage { role = "assistant", content = "Manager has rejected this task 3 times consecutively. Pausing for user feedback." });
+                            SaveHistory();
+                            return;
+                        }
+
+                        _routingDecision = nextRouting == "ui_agent" ? "ui" : "generic";
+                        _history.Add(new ChatMessage { role = "user", content = $"[Manager Audit Failed]: The Manager detected that the task is incomplete. Feedback: {feedback}\n\nSYSTEM DIRECTIVE: Review the feedback above, plan how to resolve the missing requirements, and immediately apply the changes. You must write/edit code or hierarchy to complete the task." });
+                        SaveHistory();
+                        
+                        _currentTurnTrace.AppendLine($"[Manager Rejected Sub-Task]: {feedback}. Re-routing to specialized agent...");
+                        onComplete?.Invoke($"<color=#FF5555><b>[Manager Rejected]:</b></color> {feedback}\nResuming execution with specialized agent...", _currentTurnTrace.ToString(), false);
+                        ExecuteRequest(model, onComplete);
+                    }
                 }
-                
                 return;
             }
 
@@ -1048,7 +1077,12 @@ Do NOT output any other text or execute any tools yet.";
                                          toolCall.method == "scene/instantiate_node" ||
                                          toolCall.method == "scene/modify_node" ||
                                          toolCall.method == "scene/set_component_property" ||
-                                         toolCall.method == "scene/execute_transactions";
+                                         toolCall.method == "scene/execute_transactions" ||
+                                         toolCall.method == "ui/setup_canvas" ||
+                                         toolCall.method == "ui/create_panel" ||
+                                         toolCall.method == "ui/create_text" ||
+                                         toolCall.method == "ui/create_button" ||
+                                         toolCall.method == "ui/setup_layout_group";
 
                     if (isDestructive && OnPendingAction != null)
                     {
@@ -1264,6 +1298,16 @@ Do NOT output any other text or execute any tools yet.";
         {
             if (toolCall.@params == null) return "Pending changes...";
             
+            if (toolCall.method == "ui/setup_canvas")
+                return "<color=#00FF00>+ Setup Canvas:</color> Create high-performance UI Canvas & EventSystem";
+            if (toolCall.method == "ui/create_panel")
+                return $"<color=#00FF00>+ Create Panel:</color> Create '{toolCall.@params.name}' under parent '{toolCall.@params.parentPath}'";
+            if (toolCall.method == "ui/create_text")
+                return $"<color=#00FF00>+ Create Text:</color> Create '{toolCall.@params.name}' with text '{toolCall.@params.textContent}'";
+            if (toolCall.method == "ui/create_button")
+                return $"<color=#00FF00>+ Create Button:</color> Create '{toolCall.@params.name}' with label '{toolCall.@params.labelText}'";
+            if (toolCall.method == "ui/setup_layout_group")
+                return $"<color=#FFFF00>~ Layout Group:</color> Configure '{toolCall.@params.groupType}' on '{toolCall.@params.path}'";
             if (toolCall.method == "project/write_file")
                 return $"<color=#00FF00>+ Write File:</color> {toolCall.@params.path}";
             if (toolCall.method == "scene/instantiate_node")
@@ -1367,6 +1411,31 @@ Do NOT output any other text or execute any tools yet.";
                     result = MCPToolRegistry.InspectNode(p.path);
                 else if (toolCall.method == "scene/inspect_component")
                     result = MCPToolRegistry.InspectComponent(p.path, p.component);
+                else if (toolCall.method == "ui/setup_canvas")
+                {
+                    result = MCPToolRegistry.SetupCanvas();
+                    onComplete?.Invoke(uiResponse + "\n\n[System]: Configuring Canvas...", _currentTurnTrace.ToString(), false);
+                }
+                else if (toolCall.method == "ui/create_panel")
+                {
+                    result = MCPToolRegistry.CreateUIPanel(p.parentPath, p.name);
+                    onComplete?.Invoke(uiResponse + "\n\n[System]: Instantiating UI Panel...", _currentTurnTrace.ToString(), false);
+                }
+                else if (toolCall.method == "ui/create_text")
+                {
+                    result = MCPToolRegistry.CreateUIText(p.parentPath, p.name, p.textContent, p.fontSize == 0 ? 24 : p.fontSize, string.IsNullOrEmpty(p.alignment) ? "Center" : p.alignment);
+                    onComplete?.Invoke(uiResponse + "\n\n[System]: Instantiating UI Text...", _currentTurnTrace.ToString(), false);
+                }
+                else if (toolCall.method == "ui/create_button")
+                {
+                    result = MCPToolRegistry.CreateUIButton(p.parentPath, p.name, p.labelText);
+                    onComplete?.Invoke(uiResponse + "\n\n[System]: Instantiating UI Button...", _currentTurnTrace.ToString(), false);
+                }
+                else if (toolCall.method == "ui/setup_layout_group")
+                {
+                    result = MCPToolRegistry.SetupLayoutGroup(p.path, p.groupType, p.spacing, string.IsNullOrEmpty(p.paddingCSV) ? "10,10,10,10" : p.paddingCSV, string.IsNullOrEmpty(p.childAlignment) ? "UpperLeft" : p.childAlignment);
+                    onComplete?.Invoke(uiResponse + "\n\n[System]: Configuring Layout Group...", _currentTurnTrace.ToString(), false);
+                }
                 else if (toolCall.method == "scene/set_component_property")
                     result = MCPToolRegistry.SetComponentProperty(p.path, p.component, p.property, p.value);
                 else if (toolCall.method == "scene/execute_transactions")
@@ -1416,6 +1485,16 @@ Do NOT output any other text or execute any tools yet.";
                 string logEntry = null;
                 switch (toolCall.method)
                 {
+                    case "ui/setup_canvas":
+                        logEntry = "Configured Canvas and EventSystem in scene"; break;
+                    case "ui/create_panel":
+                        logEntry = $"Created UI Panel: '{q.name}' under parent '{q.parentPath}'"; break;
+                    case "ui/create_text":
+                        logEntry = $"Created UI Text: '{q.name}' with text '{q.textContent}'"; break;
+                    case "ui/create_button":
+                        logEntry = $"Created UI Button: '{q.name}' with label '{q.labelText}'"; break;
+                    case "ui/setup_layout_group":
+                        logEntry = $"Set up layout group ({q.groupType}) on '{q.path}'"; break;
                     case "project/write_file":
                         logEntry = $"Wrote file: '{q.path}'"; break;
                     case "project/edit_file":
@@ -1567,6 +1646,17 @@ Do NOT output any other text or execute any tools yet.";
             public string destinationAssetPath;
             public string query;
             public List<TransactionOperation> operations;
+
+            // UI Specialist Fields
+            public string parentPath;
+            public string textContent;
+            public int fontSize;
+            public string alignment;
+            public string labelText;
+            public string groupType;
+            public float spacing;
+            public string paddingCSV;
+            public string childAlignment;
         }
 
         public static List<TransactionOperation> ParseOperationsFallback(string rawJson)

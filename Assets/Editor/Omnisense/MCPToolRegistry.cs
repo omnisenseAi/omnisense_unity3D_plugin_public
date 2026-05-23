@@ -1139,6 +1139,343 @@ namespace Omnisense
                 error = errorMsg
             };
         }
+
+        private static string GetGameObjectPath(GameObject go)
+        {
+            if (go == null) return "";
+            string path = go.name;
+            while (go.transform.parent != null)
+            {
+                go = go.transform.parent.gameObject;
+                path = go.name + "/" + path;
+            }
+            return path;
+        }
+
+        public static ToolResult SetupCanvas()
+        {
+            Debug.Log("[Omnisense] Tool: SetupCanvas()");
+            try
+            {
+                var canvas = GameObject.FindObjectOfType<Canvas>();
+                if (canvas != null)
+                {
+                    return new ToolResult { success = true, observation = $"Canvas already exists at path: {GetGameObjectPath(canvas.gameObject)}" };
+                }
+
+                GameObject canvasGo = new GameObject("Canvas");
+                canvasGo.layer = 5; // UI Layer
+                var canvasComponent = canvasGo.AddComponent<Canvas>();
+                canvasComponent.renderMode = RenderMode.ScreenSpaceOverlay;
+
+                var scaler = canvasGo.AddComponent<UnityEngine.UI.CanvasScaler>();
+                scaler.uiScaleMode = UnityEngine.UI.CanvasScaler.ScaleMode.ScaleWithScreenSize;
+                scaler.referenceResolution = new Vector2(1920, 1080);
+                scaler.screenMatchMode = UnityEngine.UI.CanvasScaler.ScreenMatchMode.MatchWidthOrHeight;
+                scaler.matchWidthOrHeight = 0.5f;
+
+                canvasGo.AddComponent<UnityEngine.UI.GraphicRaycaster>();
+
+                Undo.RegisterCreatedObjectUndo(canvasGo, "Create Canvas");
+
+                var eventSystem = GameObject.FindObjectOfType<UnityEngine.EventSystems.EventSystem>();
+                string eventSystemObservation = "";
+                if (eventSystem == null)
+                {
+                    GameObject eventGo = new GameObject("EventSystem");
+                    eventGo.AddComponent<UnityEngine.EventSystems.EventSystem>();
+                    eventGo.AddComponent<UnityEngine.EventSystems.StandaloneInputModule>();
+                    Undo.RegisterCreatedObjectUndo(eventGo, "Create EventSystem");
+                    eventSystemObservation = " and created EventSystem GameObject.";
+                }
+
+                return new ToolResult { success = true, observation = $"Created base modern Canvas at path: Canvas{eventSystemObservation}" };
+            }
+            catch (Exception e)
+            {
+                return new ToolResult { success = false, error = e.Message };
+            }
+        }
+
+        public static ToolResult CreateUIPanel(string parentPath, string name)
+        {
+            Debug.Log($"[Omnisense] Tool: CreateUIPanel(parent='{parentPath}', name='{name}')");
+            try
+            {
+                GameObject parentGo = null;
+                if (!string.IsNullOrEmpty(parentPath))
+                {
+                    parentGo = FindGameObjectDeep(parentPath);
+                    if (parentGo == null)
+                    {
+                        return new ToolResult { success = false, error = $"Parent GameObject not found at path: {parentPath}" };
+                    }
+                }
+                else
+                {
+                    var canvas = GameObject.FindObjectOfType<Canvas>();
+                    if (canvas != null) parentGo = canvas.gameObject;
+                    else
+                    {
+                        var canvasRes = SetupCanvas();
+                        if (canvasRes.success)
+                        {
+                            var canvasObj = GameObject.FindObjectOfType<Canvas>();
+                            if (canvasObj != null) parentGo = canvasObj.gameObject;
+                        }
+                    }
+                }
+
+                GameObject panelGo = new GameObject(string.IsNullOrEmpty(name) ? "UIPanel" : name);
+                panelGo.layer = 5; // UI layer
+                if (parentGo != null) panelGo.transform.SetParent(parentGo.transform, false);
+
+                var rect = panelGo.AddComponent<RectTransform>();
+                rect.anchorMin = Vector2.zero;
+                rect.anchorMax = Vector2.one;
+                rect.anchoredPosition = Vector2.zero;
+                rect.sizeDelta = Vector2.zero;
+
+                panelGo.AddComponent<CanvasRenderer>();
+                var img = panelGo.AddComponent<UnityEngine.UI.Image>();
+                img.color = new Color(0, 0, 0, 0.4f);
+
+                Undo.RegisterCreatedObjectUndo(panelGo, "Create UI Panel");
+                Selection.activeGameObject = panelGo;
+
+                return new ToolResult { success = true, observation = $"Created UI Panel at path: {GetGameObjectPath(panelGo)}" };
+            }
+            catch (Exception e)
+            {
+                return new ToolResult { success = false, error = e.Message };
+            }
+        }
+
+        public static ToolResult CreateUIText(string parentPath, string name, string textContent, int fontSize = 24, string alignment = "Center")
+        {
+            Debug.Log($"[Omnisense] Tool: CreateUIText(parent='{parentPath}', name='{name}', text='{textContent}', fontSize={fontSize}, align='{alignment}')");
+            try
+            {
+                GameObject parentGo = null;
+                if (!string.IsNullOrEmpty(parentPath))
+                {
+                    parentGo = FindGameObjectDeep(parentPath);
+                    if (parentGo == null) return new ToolResult { success = false, error = $"Parent GameObject not found at path: {parentPath}" };
+                }
+
+                GameObject textGo = new GameObject(string.IsNullOrEmpty(name) ? "UIText" : name);
+                textGo.layer = 5;
+                if (parentGo != null) textGo.transform.SetParent(parentGo.transform, false);
+
+                var rect = textGo.AddComponent<RectTransform>();
+                rect.sizeDelta = new Vector2(200, 50);
+
+                textGo.AddComponent<CanvasRenderer>();
+
+                Type tmpType = ResolveComponentType("TMPro.TextMeshProUGUI");
+                if (tmpType != null)
+                {
+                    Component tmpComponent = textGo.AddComponent(tmpType);
+                    
+                    var textProp = tmpType.GetProperty("text");
+                    if (textProp != null) textProp.SetValue(tmpComponent, textContent);
+
+                    var sizeProp = tmpType.GetProperty("fontSize");
+                    if (sizeProp != null) sizeProp.SetValue(tmpComponent, (float)fontSize);
+
+                    var alignProp = tmpType.GetProperty("alignment");
+                    if (alignProp != null)
+                    {
+                        try
+                        {
+                            Type alignEnum = alignProp.PropertyType;
+                            object enumVal = Enum.Parse(alignEnum, alignment, true);
+                            alignProp.SetValue(tmpComponent, enumVal);
+                        }
+                        catch
+                        {
+                            try
+                            {
+                                Type alignEnum = alignProp.PropertyType;
+                                object enumVal = Enum.Parse(alignEnum, "Center", true);
+                                alignProp.SetValue(tmpComponent, enumVal);
+                            }
+                            catch {}
+                        }
+                    }
+
+                    Undo.RegisterCreatedObjectUndo(textGo, "Create TextMeshPro Text");
+                    Selection.activeGameObject = textGo;
+                    return new ToolResult { success = true, observation = $"Created TMPro Text at path: {GetGameObjectPath(textGo)} with content '{textContent}'" };
+                }
+                else
+                {
+                    var txt = textGo.AddComponent<UnityEngine.UI.Text>();
+                    txt.text = textContent;
+                    txt.fontSize = fontSize;
+                    
+                    if (alignment.Contains("Center")) txt.alignment = TextAnchor.MiddleCenter;
+                    else if (alignment.Contains("Left")) txt.alignment = TextAnchor.MiddleLeft;
+                    else if (alignment.Contains("Right")) txt.alignment = TextAnchor.MiddleRight;
+                    
+                    Undo.RegisterCreatedObjectUndo(textGo, "Create Legacy Text");
+                    Selection.activeGameObject = textGo;
+                    return new ToolResult { success = true, observation = $"Created Legacy Text at path: {GetGameObjectPath(textGo)} with content '{textContent}'" };
+                }
+            }
+            catch (Exception e)
+            {
+                return new ToolResult { success = false, error = e.Message };
+            }
+        }
+
+        public static ToolResult CreateUIButton(string parentPath, string name, string labelText)
+        {
+            Debug.Log($"[Omnisense] Tool: CreateUIButton(parent='{parentPath}', name='{name}', label='{labelText}')");
+            try
+            {
+                GameObject parentGo = null;
+                if (!string.IsNullOrEmpty(parentPath))
+                {
+                    parentGo = FindGameObjectDeep(parentPath);
+                    if (parentGo == null) return new ToolResult { success = false, error = $"Parent GameObject not found at path: {parentPath}" };
+                }
+
+                GameObject btnGo = new GameObject(string.IsNullOrEmpty(name) ? "UIButton" : name);
+                btnGo.layer = 5;
+                if (parentGo != null) btnGo.transform.SetParent(parentGo.transform, false);
+
+                var rect = btnGo.AddComponent<RectTransform>();
+                rect.sizeDelta = new Vector2(160, 45);
+
+                btnGo.AddComponent<CanvasRenderer>();
+                var img = btnGo.AddComponent<UnityEngine.UI.Image>();
+                img.color = Color.white;
+
+                var btn = btnGo.AddComponent<UnityEngine.UI.Button>();
+                
+                var colors = btn.colors;
+                colors.normalColor = new Color(0.9f, 0.9f, 0.9f);
+                colors.highlightedColor = new Color(1f, 1f, 1f);
+                colors.pressedColor = new Color(0.7f, 0.7f, 0.7f);
+                btn.colors = colors;
+
+                Undo.RegisterCreatedObjectUndo(btnGo, "Create UI Button");
+
+                var labelRes = CreateUIText(GetGameObjectPath(btnGo), "Label", labelText, 20, "Center");
+                
+                GameObject labelGo = btnGo.transform.Find("Label")?.gameObject;
+                if (labelGo != null)
+                {
+                    var labelRect = labelGo.GetComponent<RectTransform>();
+                    if (labelRect != null)
+                    {
+                        labelRect.anchorMin = Vector2.zero;
+                        labelRect.anchorMax = Vector2.one;
+                        labelRect.anchoredPosition = Vector2.zero;
+                        labelRect.sizeDelta = Vector2.zero;
+                    }
+                }
+
+                Selection.activeGameObject = btnGo;
+                return new ToolResult { success = true, observation = $"Created Button at path: {GetGameObjectPath(btnGo)} with label text '{labelText}'" };
+            }
+            catch (Exception e)
+            {
+                return new ToolResult { success = false, error = e.Message };
+            }
+        }
+
+        public static ToolResult SetupLayoutGroup(string path, string groupType, float spacing = 10f, string paddingCSV = "10,10,10,10", string childAlignment = "UpperLeft")
+        {
+            Debug.Log($"[Omnisense] Tool: SetupLayoutGroup(path='{path}', type='{groupType}', spacing={spacing}, padding='{paddingCSV}', align='{childAlignment}')");
+            try
+            {
+                GameObject go = FindGameObjectDeep(path);
+                if (go == null) return new ToolResult { success = false, error = $"GameObject not found at path: {path}" };
+
+                int pLeft = 10, pRight = 10, pTop = 10, pBottom = 10;
+                string[] parts = paddingCSV.Split(',');
+                if (parts.Length >= 4)
+                {
+                    int.TryParse(parts[0].Trim(), out pLeft);
+                    int.TryParse(parts[1].Trim(), out pRight);
+                    int.TryParse(parts[2].Trim(), out pTop);
+                    int.TryParse(parts[3].Trim(), out pBottom);
+                }
+
+                TextAnchor anchor = TextAnchor.UpperLeft;
+                Enum.TryParse(childAlignment, true, out anchor);
+
+                string addedType = "";
+
+                if (groupType.ToLower().Contains("vertical"))
+                {
+                    var existingH = go.GetComponent<UnityEngine.UI.HorizontalLayoutGroup>();
+                    if (existingH != null) Undo.DestroyObjectImmediate(existingH);
+                    var existingG = go.GetComponent<UnityEngine.UI.GridLayoutGroup>();
+                    if (existingG != null) Undo.DestroyObjectImmediate(existingG);
+
+                    var vGroup = go.GetComponent<UnityEngine.UI.VerticalLayoutGroup>() ?? go.AddComponent<UnityEngine.UI.VerticalLayoutGroup>();
+                    vGroup.spacing = spacing;
+                    vGroup.padding = new RectOffset(pLeft, pRight, pTop, pBottom);
+                    vGroup.childAlignment = anchor;
+                    vGroup.childControlWidth = true;
+                    vGroup.childControlHeight = true;
+                    vGroup.childForceExpandWidth = true;
+                    vGroup.childForceExpandHeight = false;
+                    addedType = "VerticalLayoutGroup";
+                }
+                else if (groupType.ToLower().Contains("horizontal"))
+                {
+                    var existingV = go.GetComponent<UnityEngine.UI.VerticalLayoutGroup>();
+                    if (existingV != null) Undo.DestroyObjectImmediate(existingV);
+                    var existingG = go.GetComponent<UnityEngine.UI.GridLayoutGroup>();
+                    if (existingG != null) Undo.DestroyObjectImmediate(existingG);
+
+                    var hGroup = go.GetComponent<UnityEngine.UI.HorizontalLayoutGroup>() ?? go.AddComponent<UnityEngine.UI.HorizontalLayoutGroup>();
+                    hGroup.spacing = spacing;
+                    hGroup.padding = new RectOffset(pLeft, pRight, pTop, pBottom);
+                    hGroup.childAlignment = anchor;
+                    hGroup.childControlWidth = true;
+                    hGroup.childControlHeight = true;
+                    hGroup.childForceExpandWidth = false;
+                    hGroup.childForceExpandHeight = true;
+                    addedType = "HorizontalLayoutGroup";
+                }
+                else if (groupType.ToLower().Contains("grid"))
+                {
+                    var existingV = go.GetComponent<UnityEngine.UI.VerticalLayoutGroup>();
+                    if (existingV != null) Undo.DestroyObjectImmediate(existingV);
+                    var existingH = go.GetComponent<UnityEngine.UI.HorizontalLayoutGroup>();
+                    if (existingH != null) Undo.DestroyObjectImmediate(existingH);
+
+                    var gGroup = go.GetComponent<UnityEngine.UI.GridLayoutGroup>() ?? go.AddComponent<UnityEngine.UI.GridLayoutGroup>();
+                    gGroup.spacing = new Vector2(spacing, spacing);
+                    gGroup.padding = new RectOffset(pLeft, pRight, pTop, pBottom);
+                    gGroup.childAlignment = anchor;
+                    addedType = "GridLayoutGroup";
+                }
+                else
+                {
+                    return new ToolResult { success = false, error = $"Unsupported layout group type: '{groupType}'" };
+                }
+
+                var existingFitter = go.GetComponent<UnityEngine.UI.ContentSizeFitter>();
+                if (existingFitter == null)
+                {
+                    var fitter = go.AddComponent<UnityEngine.UI.ContentSizeFitter>();
+                    fitter.verticalFit = UnityEngine.UI.ContentSizeFitter.FitMode.PreferredSize;
+                    fitter.horizontalFit = UnityEngine.UI.ContentSizeFitter.FitMode.Unconstrained;
+                }
+
+                return new ToolResult { success = true, observation = $"Successfully configured {addedType} on GameObject '{go.name}' with alignment {anchor} and content size fitter." };
+            }
+            catch (Exception e)
+            {
+                return new ToolResult { success = false, error = e.Message };
+            }
+        }
     }
 
     [Serializable]
