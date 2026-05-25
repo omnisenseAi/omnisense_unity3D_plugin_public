@@ -203,8 +203,7 @@ namespace Omnisense
             _persistentScratchpad.Clear();
 
             // Initialize with correct System Prompt
-            string model = EditorPrefs.GetString("Omnisense_SelectedModel", "gpt-4o");
-            string promptToUse = model == "self-hosted" ? SYSTEM_PROMPT_LITE : GENERIC_WORKER_PROMPT;
+            string promptToUse = GENERIC_WORKER_PROMPT + "\n\n" + SHARED_MCP_INSTRUCTIONS;
             _history.Add(new ChatMessage { role = "system", content = promptToUse });
 
             // Re-bootstrap DNA
@@ -314,11 +313,10 @@ When editing or creating scripts/objects:
 1. **Thought & Action**: Output a <thought> block to plan your steps, then IMMEDIATELY output the ```mcp_json tool block.
 2. If you are completely finished with your task, summarize your progress and output plain text without any tool call to signal completion.";
 
-        private const string SYSTEM_PROMPT_LITE = @"You are the Omnisense Assistant, a helpful AI developer agent.
-Your goal is to execute commands to help the user. Think step by step using a <thought> block, and THEN IMMEDIATELY output your tool call in the same message. NEVER stop generating after a thought block.
+        private const string SHARED_MCP_INSTRUCTIONS = @"You have access to the following MCP tools. To use a tool, think step-by-step using a <thought> block, and THEN IMMEDIATELY output your tool call in the same message. NEVER stop generating after a thought block.
 Wait for the [Observation] from the system ONLY AFTER you have output a tool block.
 
-You have access to the following MCP tools. To use a tool, output exactly this format:
+You must output exactly this format:
 ```mcp_json
 {
     ""method"": ""TOOL_NAME"",
@@ -329,17 +327,35 @@ You have access to the following MCP tools. To use a tool, output exactly this f
 ```
 
 Available Tools:
-1. project/list_directory (params: ""path"") - Lists files.
+1. project/list_directory (params: ""path"") - Lists files inside a directory.
 2. project/read_file (params: ""path"") - Reads the contents of a text file.
 3. project/write_file (params: ""path"", ""content"") - Creates a NEW file.
-4. project/edit_file (params: ""path"", ""search_block"", ""replace_block"") - Edits existing files. Use exact string matches for search_block.
-5. scene/instantiate_node (params: ""type"", ""name"") - Creates a GameObject.
-6. scene/modify_node (params: ""path"", ""property"", ""value"") - Edits a Scene GameObject OR a Project Prefab.
-7. scene/inspect_node (params: ""path"") - Returns an object/prefab's components.
-8. editor/read_console (params: none) - Returns the latest warnings/errors.
-9. scene/list_all_nodes (params: none) - Returns a list of all root GameObjects.
-10. scene/inspect_component (params: ""path"", ""component"") - Lists properties of a specific component.
-11. scene/set_component_property (params: ""path"", ""component"", ""property"", ""value"") - Sets a property on a component.";
+4. project/edit_file (params: ""path"", ""search_block"", ""replace_block"") - Edits existing files using exact string matches for search_block.
+5. project/create_prefab (params: ""path"", ""destinationAssetPath"") - Creates a prefab asset from a scene node path.
+6. project/create_tag_or_layer (params: ""type"" (""tag"" or ""layer""), ""name"") - Creates a new tag or layer in project settings.
+7. project/list_tags_and_layers (params: none) - Lists all tags and layers.
+8. project/search_assets (params: ""query"") - Searches AssetDatabase for matching assets.
+9. project/inspect_player_settings (params: none) - Returns active player setup and configurations.
+10. project/list_packages (params: none) - Reads the project package manifest.json.
+11. project/inspect_build_settings (params: none) - Lists scenes in build and active platform.
+12. project/get_asset_guid (params: ""path"") - Gets unique GUID of a project asset.
+13. project/inspect_asset (params: ""path"") - Inspects a project asset's or prefab's components and properties.
+14. project/update_dna (params: ""content"") - Updates the project architecture guidelines file (.omnisense_dna.md).
+15. scene/list_all_nodes (params: none) - Returns all root GameObjects currently active in the scene.
+16. scene/instantiate_node (params: ""type"", ""name"", ""parentPath"" (optional)) - Spawns a primitive or prefab in the scene.
+17. scene/modify_node (params: ""path"", ""property"" (""position""|""name""|""add_child""|""add_component""|""remove_component""|""tag""|""layer""), ""value"") - Edits components, children, or basic fields of a scene object or prefab instance.
+18. scene/inspect_node (params: ""path"") - Returns components, children, and properties of a scene object or prefab.
+19. scene/inspect_component (params: ""path"", ""component"") - Inspects all serialized fields of a component on a node.
+20. scene/set_component_property (params: ""path"", ""component"", ""property"", ""value"") - Sets a serialized component property.
+21. scene/execute_transactions (params: ""operations"") - Batch executes multiple scene modifications in a single turn.
+22. editor/read_console (params: none) - Returns the latest warning/error logs from the Unity Editor console.
+
+Specialized UI Tools:
+23. ui/setup_canvas (params: none) - Configures a standard Canvas and EventSystem with screen size scaling (Reference: 1920x1080). Proactively use this first!
+24. ui/create_panel (params: ""parentPath"", ""name"") - Creates a UI container panel under a parent Canvas or node.
+25. ui/create_text (params: ""parentPath"", ""name"", ""textContent"", ""fontSize"" (int), ""alignment"" (string)) - Creates a TextMeshPro UGUI component.
+26. ui/create_button (params: ""parentPath"", ""name"", ""labelText"") - Creates a beautiful button with a centered text label.
+27. ui/setup_layout_group (params: ""path"", ""groupType"" (""Vertical""|""Horizontal""|""Grid""), ""spacing"" (float), ""paddingCSV"" (e.g. ""10,10,10,10""), ""childAlignment"" (string)) - Configures Vertical, Horizontal, or Grid layout group with Content Size Fitters.";
 
         public void ProcessPrompt(string prompt, string model, string turnId, Action<string, string, bool> onComplete)
         {
@@ -384,11 +400,11 @@ Available Tools:
             }
             else if (_routingDecision == "ui")
             {
-                rolePrompt = UI_SPECIALIST_PROMPT;
+                rolePrompt = UI_SPECIALIST_PROMPT + "\n\n" + SHARED_MCP_INSTRUCTIONS;
             }
             else
             {
-                rolePrompt = model == "self-hosted" ? SYSTEM_PROMPT_LITE : GENERIC_WORKER_PROMPT;
+                rolePrompt = GENERIC_WORKER_PROMPT + "\n\n" + SHARED_MCP_INSTRUCTIONS;
             }
 
             _history.Insert(0, new ChatMessage { role = "system", content = rolePrompt });
@@ -450,6 +466,7 @@ Available Tools:
 
         private void ExecuteRequest(string model, Action<string, string, bool> onComplete, List<ChatMessage> customHistory = null)
         {
+            Debug.Log($"[Omnisense-MultiAgent] Routing: {_routingDecision} | Task: {_currentTask}");
             _stepCount++;
             if (_stepCount > MAX_STEPS)
             {
@@ -848,6 +865,8 @@ Available Tools:
 
         private void HandleResponse(string response, string model, Action<string, string, bool> onComplete)
         {
+            Debug.Log($"[Omnisense-MultiAgent] Raw Response:\n{response}");
+            Debug.Log($"[Omnisense-MultiAgent] Routing: {_routingDecision} | Task: {_currentTask}");
             if (_routingDecision == "planner")
             {
                 Debug.Log($"[Omnisense-Orchestration] Planner Response Received. Parsing Task List...");
