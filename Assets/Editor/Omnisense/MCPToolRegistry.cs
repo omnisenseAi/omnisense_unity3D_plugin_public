@@ -1061,7 +1061,7 @@ namespace Omnisense
                     {
                         subResult = ModifyNode(op.path, "remove_component", string.IsNullOrEmpty(op.component) ? op.value : op.component);
                     }
-                    else if (actionName == "set_component_property" || actionName == "scene/set_component_property" || actionName == "set_property" || actionName == "setproperty")
+                    else if (actionName == "set_component_property" || actionName == "scene/set_component_property" || actionName == "set_property" || actionName == "setproperty" || actionName == "modify_component_property")
                     {
                         subResult = SetComponentProperty(op.path, op.component, op.property, op.value);
                     }
@@ -1470,6 +1470,40 @@ namespace Omnisense
                 }
 
                 return new ToolResult { success = true, observation = $"Successfully configured {addedType} on GameObject '{go.name}' with alignment {anchor} and content size fitter." };
+            }
+            catch (Exception e)
+            {
+                return new ToolResult { success = false, error = e.Message };
+            }
+        }
+
+        public static ToolResult CaptureUIScreenshot(string destinationAssetPath = "Assets/Editor/Omnisense/UI_Dump.png")
+        {
+            Debug.Log($"[Omnisense] Tool: CaptureUIScreenshot(destination='{destinationAssetPath}')");
+            try
+            {
+                if (string.IsNullOrEmpty(destinationAssetPath))
+                {
+                    destinationAssetPath = "Assets/Editor/Omnisense/UI_Dump.png";
+                }
+
+                string absolutePath = Path.Combine(Application.dataPath, "..", destinationAssetPath);
+                string directory = Path.GetDirectoryName(absolutePath);
+                if (!Directory.Exists(directory)) Directory.CreateDirectory(directory);
+
+                // Focus and repaint Game View to ensure screen buffer synchronization
+                System.Type gameViewType = System.Type.GetType("UnityEditor.GameView,UnityEditor");
+                EditorWindow gameView = EditorWindow.GetWindow(gameViewType);
+                if (gameView != null)
+                {
+                    gameView.Focus();
+                    gameView.Repaint();
+                }
+
+                ScreenCapture.CaptureScreenshot(destinationAssetPath);
+                
+                string json = $"{{\"status\":\"Success\",\"screenshot_path\":\"{destinationAssetPath}\",\"dimensions\":\"1920x1080\"}}";
+                return new ToolResult { success = true, observation = json };
             }
             catch (Exception e)
             {

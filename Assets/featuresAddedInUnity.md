@@ -336,3 +336,27 @@ The agent's "hands" have been specifically tuned for the Unity Editor environmen
 - **Case-Insensitive Typos/Casing Correction**: Incorporated case-insensitive deep-path matching using `StringComparison.OrdinalIgnoreCase`. This gracefully intercepts and resolves minor casing typos from the AI agent (e.g., matching nested casing variations) without breaking scene graph references.
 - **Deep Fallback Resolution**: Added a secondary fallback segment search (`FindByNameRecursive`) starting from any root GameObject if a full path cannot be constructed, maximizing path-resolution reliability in complex scenes.
 - **Compiler Safety & 0-Error Build Guarantee**: Re-verified the entire workspace's C# assembly compilation against the dotnet compiler to guarantee 0-error and 0-warning compiler compliance.
+
+---
+
+## 42. Vision-Assisted UI Automation & Batch Transactions (Phase 41)
+- **Two-Pass Vision Protocol**: Enforced a strict maximum of two screenshots per UI sub-task (Pass 1: Visual Baseline, Pass 2: Final Verification) to effectively manage API tokens and prevent endless vision loops.
+- **Dynamic Vision Payload Streaming**: Implemented `scene/capture_ui_screenshot` in `MCPToolRegistry`. The `AIOrchestrator` now dynamically identifies `"screenshot_path"` outputs and injects them as Base64 multi-modal payloads, properly mapped for OpenAI, Anthropic, Gemini, Grok, and local APIs.
+- **Enhanced UI Batch Transactions**: Upgraded `scene/execute_transactions` to support `modify_component_property`. This enables the agent to batch-edit complex UI elements (e.g., `RectTransform` anchors, offsets, and positions) in a single transactional turn rather than making continuous small edits.
+- **Active Scene Inspection Mandate**: Updated the system prompts to mandate the use of `scene/inspect_component` and `scene/list_all_nodes`. Agents no longer assume they are "blind" and will proactively read the scene hierarchy.
+- **Manager-Worker Context Isolation**: Refactored `AIOrchestrator.cs` to execute Manager routing queries in an isolated temporary context. This prevents the worker's history from being polluted with manager evaluations.
+
+---
+
+## 43. Dedicated Unity3D Coding & Scripting Agent (Phase 42)
+- **Gameplay Programming Specialist**: Added the `CODING_SPECIALIST_PROMPT` to define a dedicated gameplay developer agent. This specialist is governed by premium C# scripting rules, physics loop guidelines (forcing `FixedUpdate` and dependencies like `[RequireComponent]`), and strict game loop optimizations (e.g. caching component references).
+- **Autonomous Multi-Agent Routing**: Enhanced both `PLANNER_SYSTEM_PROMPT` and `MANAGER_SYSTEM_PROMPT` to identify C# programming, physics, and gameplay logic tasks, dynamically routing them to the new `'coding_agent'` while routing UI layouts and tags/setup to their respective specialist agents.
+- **High-Capacity Output Token Scaling**: Programmed a token booster across all API connectors (OpenAI, Anthropic, Gemini, Grok, Self-Hosted). When the `coding` routing decision is active, the orchestrator automatically doubles or forces the output tokens limit to at least `8192` tokens, ensuring massive C# classes can generate fully without truncation.
+- **Dynamic Visual Status Tracking**: Upgraded routing logs to announce the precise agent name (e.g. *"Unity3D Coding/Scripting Specialist"*) when task delegation happens.
+
+---
+
+## 44. Loop Prevention & Decisive Anti-Loop Prompts (Phase 43)
+- **Anti-Speculation Mandate**: Hardened all specialist worker prompts (`CODING_SPECIALIST_PROMPT`, `UI_SPECIALIST_PROMPT`, `GENERIC_WORKER_PROMPT`) to ban speculative, passive, or conversational phrasing (e.g. *"Not yet guaranteed"*, *"If you want I can"*, *"Maybe this will work"*). Workers are directed to be absolutely decisive, immediately execute tool actions, run validation checks (console and scene tree), and output clean success summaries.
+- **Pragmatic Manager Verification**: Overhauled the `MANAGER_SYSTEM_PROMPT` success criteria to prioritize confirmed tool outcomes (such as successful write/edit operations) and compile logs over pedantic natural language phrasing. The manager will no longer reject successful code edits just because the worker used careful text.
+- **Advanced Diagnostics & Tracing**: Injected additional diagnostic `Debug.Log` statements throughout the context builder and request dispatch pipeline to track history sizes, active execution steps, and token boosting for seamless debugging.

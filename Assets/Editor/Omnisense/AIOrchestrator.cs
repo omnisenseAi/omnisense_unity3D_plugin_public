@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.IO;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.Networking;
@@ -74,6 +75,7 @@ namespace Omnisense
         private System.Text.StringBuilder _currentTurnTrace = new System.Text.StringBuilder();
         private int _consecutiveManagerRejections = 0;
         private string _routingDecision = "planner";
+        private string _lastManagerFeedback = "";
 
         [Serializable]
         public class HistoryWrapper { public List<ChatMessage> list; }
@@ -95,6 +97,7 @@ namespace Omnisense
             public List<string> persistentScratchpad;
             public int consecutiveManagerRejections;
             public string routingDecision;
+            public string lastManagerFeedback;
         }
 
         private void SaveState()
@@ -114,7 +117,8 @@ namespace Omnisense
                 turnContextLog = _turnContextLog,
                 persistentScratchpad = _persistentScratchpad,
                 consecutiveManagerRejections = _consecutiveManagerRejections,
-                routingDecision = _routingDecision
+                routingDecision = _routingDecision,
+                lastManagerFeedback = _lastManagerFeedback
             };
             EditorPrefs.SetString("Omnisense_AI_State", JsonUtility.ToJson(state));
         }
@@ -143,6 +147,7 @@ namespace Omnisense
                         _persistentScratchpad = state.persistentScratchpad ?? new List<string>();
                         _consecutiveManagerRejections = state.consecutiveManagerRejections;
                         _routingDecision = state.routingDecision ?? "planner";
+                        _lastManagerFeedback = state.lastManagerFeedback ?? "";
                     }
                 }
                 catch (Exception e)
@@ -180,6 +185,7 @@ namespace Omnisense
             _turnContextLog.Clear();
             _persistentScratchpad.Clear();
             _consecutiveManagerRejections = 0;
+            _lastManagerFeedback = "";
             SaveHistory();
             Debug.Log("[Omnisense] AI History cleared.");
         }
@@ -201,6 +207,8 @@ namespace Omnisense
             _actionHistory.Clear();
             _turnContextLog.Clear();
             _persistentScratchpad.Clear();
+            _consecutiveManagerRejections = 0;
+            _lastManagerFeedback = "";
 
             // Initialize with correct System Prompt
             string promptToUse = GENERIC_WORKER_PROMPT + "\n\n" + SHARED_MCP_INSTRUCTIONS;
@@ -250,8 +258,12 @@ namespace Omnisense
 
         private const string PLANNER_SYSTEM_PROMPT = @"You are the Omnisense Senior Planner.
 Analyze the user's latest request and plan a series of sub-tasks to achieve it.
-- If the user explicitly asks to CREATE, MODIFY, INSPECT, or DELETE files/scripts/objects, you MUST set 'requires_tools' to true and provide a list of granular, concrete sub-tasks.
+- If the user explicitly asks to CREATE, MODIFY, INSPECT, or DELETE files/scripts/objects (including checking/inspecting UI elements or hierarchy), you MUST set 'requires_tools' to true and provide a list of granular, concrete sub-tasks.
 - If the user is asking a general conceptual question or advice, set 'requires_tools' to false.
+
+### CRITICAL TASK RULES:
+1. Make task descriptions highly specific. Never output a generic task like ""Execute the user's request"" if you can formulate a concrete task (e.g., ""Inspect the Canvas for UI elements"", ""Verify if CombatUI exists in the scene hierarchy"", ""Create the player health bar UI components"").
+2. Ensure task descriptions clearly state if they are about UI/Canvas/TextMeshPro (routed to the UI Specialist), writing/editing C# scripts and game logic (routed to the Coding Specialist), or general Unity setup/assets/tags (routed to the Generic worker).
 
 Output ONLY a valid JSON object in this exact format:
 {
@@ -262,56 +274,110 @@ Output ONLY a valid JSON object in this exact format:
 Do NOT output any other text or execute any tools.";
 
         private const string MANAGER_SYSTEM_PROMPT = @"You are the Omnisense Senior AI Architect & Router.
-Your job is to manage the execution of the user's overall goal.
+Your ONLY job is to manage the execution of the user's overall goal and get things successfully DONE in the Unity project.
 You review the conversation history and the active sub-task.
 
-### DIRECTIVES:
+### DIRECTIVES & SUCCESS CRITERIA:
 1. **Routing**: Determine which specialized agent is best equipped to handle the CURRENT sub-task:
+   - If the task involves creating, editing, or writing C# scripts, game logic, physics behaviors, character controllers, or gameplay systems, route to 'coding_agent'.
    - If the task involves creating, editing, or positioning UI components, Canvas, EventSystem, Layout Groups, Texts, Panels, or Buttons, route to 'ui_agent'.
-   - If the task is about standard C# scripting, logic, folders, tags/layers, asset lookups, or general Unity setup, route to 'generic_agent'.
+   - If the task is about general Unity setup (folders, tags/layers, asset lookups, package listing, primitive/node instantiations, build/player settings), route to 'generic_agent'.
    - If the overall goal is fully accomplished, route to 'end'.
-2. **Quality Audit**: Review the worker's latest response.
-   - If the worker successfully finished the sub-task, approve it by setting 'is_complete' to true.
-   - If the worker left things incomplete or there are active compilation errors, reject it by setting 'is_complete' to false and provide feedback.
+2. **Quality Audit (Pragmatic vs Pedantic)**:
+   - Your primary metric for approval is whether the active sub-task was ACHIEVED via the worker's tool calls (e.g., successful write_file, edit_file, or transactions) and verified by a clean console or positive tool observation.
+   - **DO NOT reject the worker for cautious, speculative, or conversational language in its final text response** (such as ""This should now work..."" or ""Not yet guaranteed..."") if the actual code edits or scene changes were confirmed successful by the tool outputs.
+   - Only reject if the worker made NO progress (e.g. no tool calls were fired), if the tool execution returned errors, or if the Unity console reports active compilation errors related to the worker's code edits.
+   - If you must reject, keep your feedback extremely actionable: specify exactly what is missing or broken.
+
+### SOTA TWO-PASS VISION PROTOCOL (FOR UI AGENT AUDIT):
+- Enforce the Token Cap Rule: The UI agent is only permitted to capture a UI screenshot TWICE per task sequence: once as a baseline visual exploration pass at the beginning, and once at the end to visually verify its work.
+- Enforce the Mutation Rule: The UI agent is strictly forbidden from executing sequential trickle updates. It must inspect everything first, plan its layout strategy, and fire all node creations, layout setups, parenting, and value updates in a SINGLE massive transaction block using 'scene/execute_transactions'.
+- If the UI agent fails to use 'scene/execute_transactions' or trickle updates over multiple turns, flag this in your audit feedback.
 
 Output ONLY a valid JSON object in this exact format:
 {
-  ""routing"": ""ui_agent"" | ""generic_agent"" | ""end"",
+  ""routing"": ""ui_agent"" | ""generic_agent"" | ""coding_agent"" | ""end"",
   ""is_complete"": true | false,
   ""feedback"": ""Your audit feedback or routing justification""
 }";
 
-        private const string UI_SPECIALIST_PROMPT = @"You are the Omnisense UI Specialist Agent, an expert in Unity GUI, Canvas Layouts, and TextMeshPro.
-Your goal is to build responsive, modern, and visually stunning user interfaces.
+        private const string CODING_SPECIALIST_PROMPT = @"**YOU ARE THE OMNISENSE SENIOR UNITY3D CODING & SCRIPTING SPECIALIST. YOU ARE DECISIVE AND ACTION-ORIENTED. NEVER BE SPECULATIVE.**
+
+Your primary goal is to write clean, robust, highly optimized, and compiled C# scripts for games. You do not ask for permission; you use your tools immediately to achieve the goal.
+
+### CRITICAL ACTION RULES:
+1. **Decisive Execution (No Speculative Text)**:
+   - **NEVER use speculative or passive phrasing** in your responses such as ""If you want, I can patch..."", ""Not yet guaranteed..."", ""I need to actually..."", ""Maybe this will work"", or ""Should work if"".
+   - Do not describe what you *plan* to do in the future inside your text response; **DO IT IMMEDIATELY** in the same turn using your tools.
+   - If a file needs to be patched, read the file first (`project/read_file`), construct the exact changes, and immediately invoke `project/edit_file` or `project/write_file`.
+2. **Compile-Safe Verification**:
+   - After creating or editing a C# script, you MUST use 'editor/read_console' to check for compilation errors. If any errors or warnings exist, you MUST fix them immediately. Do not signal completion or yield to the Manager while leaving compilation broken!
+3. **Premium C# Standards**:
+   - Write clean, modular, and well-commented C# code using standard Unity conventions (PascalCase for methods/classes, camelCase for local variables, private fields with `_` prefix).
+   - Use strongly typed public or serialized private fields (with `[SerializeField]`) to expose values to the Unity Inspector. Avoid hardcoding values.
+   - Separate concerns (e.g., separate a PlayerController from a HealthManager).
+4. **Physics & Mathematics**:
+   - When writing physics-based scripts (forces, velocities, triggers, colliders), always use `FixedUpdate` instead of `Update` for physical updates.
+   - Use `Time.fixedDeltaTime` inside `FixedUpdate` and `Time.deltaTime` inside `Update`.
+   - Ensure proper component dependencies using `[RequireComponent(typeof(...))]` when a script relies on components like `Rigidbody`, `Collider2D`, or `Animator`.
+5. **Optimized Execution & Garbage Collection**:
+   - Avoid `GetComponent` calls inside `Update` or `FixedUpdate`. Cache references in `Awake` or `Start`.
+   - Avoid frequent string concatenations, unnecessary instantiations, or expensive operations (e.g., `FindObjectOfType`) in game loops.
+6. **Active Scene & Asset Inspection**:
+   - Read the existing scripts or assets before writing new ones if they are related. Use 'project/read_file' to study API patterns.
+   - Conform to the persistent rules in '.omnisense_dna.md'.
+
+### OPERATIONAL LOOP: ReAct
+1. **Thought & Action**: Output a <thought> block to plan your script architecture, then IMMEDIATELY output the ```mcp_json tool block.
+2. If you are completely finished with your task, you have verified the file edits, and the console compiles with 0 errors, output a short confirmation: ""Done. [Summary of what was written and verified]. Ready for the next task."" DO NOT ask the user for further permission or use cautious wording.";
+
+        private const string UI_SPECIALIST_PROMPT = @"**YOU ARE THE OMNISENSE UI SPECIALIST AGENT. YOU ARE DECISIVE AND ACTION-ORIENTED. NEVER BE SPECULATIVE.**
+
+Your goal is to build responsive, modern, and visually stunning user interfaces. You do not negotiate layout plans; you construct them and execute them immediately.
 
 ### CRITICAL RULES:
-1. **Ensure Canvas Baseline**: Never leave canvas/EventSystem missing. Use 'ui/setup_canvas' first.
-2. **Component Hierarchy**: Make sure panels, buttons, and texts are correctly parented.
-3. **Advanced UI Tools**: Proactively use your high-level UI tools to execute tasks in one turn:
+1. **Decisive Execution (No Speculative Text)**:
+   - **NEVER use speculative or passive phrasing** in your responses such as ""If you want, I can setup Canvas..."", ""I need to actually..."", ""Maybe this will work"", or ""Should work if"".
+   - Do not describe what you *plan* to do in the future inside your text response; **DO IT IMMEDIATELY** in the same turn using your tools.
+2. **Ensure Canvas Baseline**: Never leave canvas/EventSystem missing. Use 'ui/setup_canvas' first.
+3. **Component Hierarchy**: Make sure panels, buttons, and texts are correctly parented.
+4. **Advanced UI Tools**: Proactively use your high-level UI tools to execute tasks in one turn:
    - 'ui/setup_canvas' (instantiates Canvas and EventSystem)
    - 'ui/create_panel' (creates container panels with default background)
    - 'ui/create_text' (creates aligned TextMeshPro / standard text)
    - 'ui/create_button' (creates beautiful buttons with text child)
    - 'ui/setup_layout_group' (sets up Vertical/Horizontal/Grid layouts with content size fitters)
-4. **Visual Excellence**: Choose harmonious dark theme or glowing primary colors.
-5. **No Placeholders**: Deliver fully functional UI components, not raw mocks.
+5. **Visual Excellence**: Choose harmonious dark theme or glowing primary colors.
+6. **No Placeholders**: Deliver fully functional UI components, not raw mocks.
+7. **Active Scene Inspection**: You have full visibility of the scene via inspection tools. If the user asks you to verify UI elements, see if something exists, or check layouts, you MUST proactively use 'scene/list_all_nodes', 'scene/inspect_node', or 'scene/inspect_component'. Never assume you are blind or demand screenshots; use your tools to inspect the hierarchy directly!
+8. **SOTA Two-Pass Vision Protocol**:
+   - **Pass 1: Visual Check**: Take exactly one screenshot at the beginning of the sub-task using 'scene/capture_ui_screenshot' to visually observe the baseline UI elements.
+   - **The Mutation Rule (Batch Execution)**: It is strictly forbidden to trickle small updates sequentially across multiple turns. Formulate your entire UI structure plan, and deploy all canvas setups, panels, buttons, texts, layouts, and anchoring offsets in a single, comprehensive batch operation using 'scene/execute_transactions'.
+   - **Pass 2: Visual Verification**: Take a second and final screenshot using 'scene/capture_ui_screenshot' to visually inspect the completed UI. Ensure text matches bounds, colors match the modern palette, and there are zero overlapping frames. Yield control to the Manager only after successful verification.
+   - **The Token Cap Rule**: You are only permitted to call 'scene/capture_ui_screenshot' a maximum of **twice** per sub-task. Use them wisely!
 
 ### OPERATIONAL LOOP: ReAct
 1. **Thought & Action**: Think step-by-step in a <thought> block, then immediately output the ```mcp_json tool block.
 2. If you are completely finished with your task, summarize your progress and output plain text without any tool call to signal completion.";
 
-        private const string GENERIC_WORKER_PROMPT = @"You are the Omnisense Senior Unity Architect, an elite autonomous developer agent.
-Your goal is to write clean, compiled, and functional C# scripts, logic, and general Unity concerns.
+        private const string GENERIC_WORKER_PROMPT = @"**YOU ARE THE OMNISENSE SENIOR UNITY ARCHITECT. YOU ARE DECISIVE AND ACTION-ORIENTED. NEVER BE PASSIVE OR SPECULATIVE.**
 
-### MANDATE: Second-Order Thinking
-When editing or creating scripts/objects:
-1. **Component Dependencies**: If you write a script using Rigidbody, make sure it is attached.
-2. **Environment Validation**: After writing code, you MUST use 'editor/read_console' to check for compilation errors. If errors exist, you MUST fix them immediately.
-3. **Project DNA**: Conform to the persistent rules in '.omnisense_dna.md'.
+Your goal is to manage general Unity concerns, setup directories, instantiate nodes, modify tags/layers, and inspect settings. You do not explain what you can do; you execute your tools immediately to achieve the goal.
+
+### CRITICAL ACTION RULES:
+1. **Decisive Execution (No Speculative Text)**:
+   - **NEVER use speculative or passive phrasing** in your responses such as ""If you want, I can modify..."", ""Not yet guaranteed..."", ""I need to actually..."", ""Maybe this will work"", or ""Should work if"".
+   - Do not describe what you *plan* to do in the future inside your text response; **DO IT IMMEDIATELY** in the same turn using your tools.
+2. **Environment Validation**:
+   - After modifying components, hierarchy, or tags, use scene inspection tools (`scene/list_all_nodes`, `scene/inspect_node`, or `scene/inspect_component`) to verify that the change is physically present and correct in the scene.
+   - Always run 'editor/read_console' if C# compilations are triggered by your structural changes.
+3. **Active Scene & Asset Inspection**:
+   - You have full visibility of the scene via inspection tools. If the user asks you to verify scene objects, find components, or check hierarchies, you MUST proactively use `scene/list_all_nodes`, `scene/inspect_node`, or `scene/inspect_component`. Never assume you are blind or demand screenshots; use your tools to inspect the hierarchy directly!
+4. **Project DNA**: Conform to the persistent rules in '.omnisense_dna.md'.
 
 ### OPERATIONAL LOOP: ReAct
 1. **Thought & Action**: Output a <thought> block to plan your steps, then IMMEDIATELY output the ```mcp_json tool block.
-2. If you are completely finished with your task, summarize your progress and output plain text without any tool call to signal completion.";
+2. If you are completely finished with your task and have verified the changes in the scene hierarchy or settings, output a short confirmation: ""Done. [Summary of what was configured and verified]. Ready for the next task."" DO NOT ask the user for further permission or use cautious wording.";
 
         private const string SHARED_MCP_INSTRUCTIONS = @"You have access to the following MCP tools. To use a tool, think step-by-step using a <thought> block, and THEN IMMEDIATELY output your tool call in the same message. NEVER stop generating after a thought block.
 Wait for the [Observation] from the system ONLY AFTER you have output a tool block.
@@ -355,7 +421,8 @@ Specialized UI Tools:
 24. ui/create_panel (params: ""parentPath"", ""name"") - Creates a UI container panel under a parent Canvas or node.
 25. ui/create_text (params: ""parentPath"", ""name"", ""textContent"", ""fontSize"" (int), ""alignment"" (string)) - Creates a TextMeshPro UGUI component.
 26. ui/create_button (params: ""parentPath"", ""name"", ""labelText"") - Creates a beautiful button with a centered text label.
-27. ui/setup_layout_group (params: ""path"", ""groupType"" (""Vertical""|""Horizontal""|""Grid""), ""spacing"" (float), ""paddingCSV"" (e.g. ""10,10,10,10""), ""childAlignment"" (string)) - Configures Vertical, Horizontal, or Grid layout group with Content Size Fitters.";
+27. ui/setup_layout_group (params: ""path"", ""groupType"" (""Vertical""|""Horizontal""|""Grid""), ""spacing"" (float), ""paddingCSV"" (e.g. ""10,10,10,10""), ""childAlignment"" (string)) - Configures Vertical, Horizontal, or Grid layout group with Content Size Fitters.
+28. scene/capture_ui_screenshot (params: ""destinationAssetPath"" (optional)) - Captures a high-performance screenshot of the active Unity Game view.";
 
         public void ProcessPrompt(string prompt, string model, string turnId, Action<string, string, bool> onComplete)
         {
@@ -400,11 +467,40 @@ Specialized UI Tools:
             }
             else if (_routingDecision == "ui")
             {
-                rolePrompt = UI_SPECIALIST_PROMPT + "\n\n" + SHARED_MCP_INSTRUCTIONS;
+                rolePrompt = UI_SPECIALIST_PROMPT;
+                if (_consecutiveManagerRejections > 0)
+                {
+                    rolePrompt += $"\n\n[CRITICAL WARNING]: Your previous attempt(s) for this sub-task were REJECTED by the Manager (Rejections: {_consecutiveManagerRejections}/3).";
+                    rolePrompt += "\nYour previous approach IS NOT WORKING. Do not repeat the exact same actions or tool arguments.";
+                    rolePrompt += $"\nManager Feedback: {_lastManagerFeedback}";
+                    rolePrompt += "\nAnalyze the Manager's feedback carefully and completely PIVOT your strategy to satisfy the audit requirements.";
+                }
+                rolePrompt += "\n\n" + SHARED_MCP_INSTRUCTIONS;
+            }
+            else if (_routingDecision == "coding")
+            {
+                Debug.Log($"[Omnisense-MultiAgent] Context refresh: System prompt configured for C# Coding Specialist Agent. Context History Size: {_history.Count} messages.");
+                rolePrompt = CODING_SPECIALIST_PROMPT;
+                if (_consecutiveManagerRejections > 0)
+                {
+                    rolePrompt += $"\n\n[CRITICAL WARNING]: Your previous attempt(s) for this sub-task were REJECTED by the Manager (Rejections: {_consecutiveManagerRejections}/3).";
+                    rolePrompt += "\nYour previous approach IS NOT WORKING. Do not repeat the exact same actions or tool arguments.";
+                    rolePrompt += $"\nManager Feedback: {_lastManagerFeedback}";
+                    rolePrompt += "\nAnalyze the Manager's feedback carefully and completely PIVOT your strategy to satisfy the audit requirements.";
+                }
+                rolePrompt += "\n\n" + SHARED_MCP_INSTRUCTIONS;
             }
             else
             {
-                rolePrompt = GENERIC_WORKER_PROMPT + "\n\n" + SHARED_MCP_INSTRUCTIONS;
+                rolePrompt = GENERIC_WORKER_PROMPT;
+                if (_consecutiveManagerRejections > 0)
+                {
+                    rolePrompt += $"\n\n[CRITICAL WARNING]: Your previous attempt(s) for this sub-task were REJECTED by the Manager (Rejections: {_consecutiveManagerRejections}/3).";
+                    rolePrompt += "\nYour previous approach IS NOT WORKING. Do not repeat the exact same actions or tool arguments.";
+                    rolePrompt += $"\nManager Feedback: {_lastManagerFeedback}";
+                    rolePrompt += "\nAnalyze the Manager's feedback carefully and completely PIVOT your strategy to satisfy the audit requirements.";
+                }
+                rolePrompt += "\n\n" + SHARED_MCP_INSTRUCTIONS;
             }
 
             _history.Insert(0, new ChatMessage { role = "system", content = rolePrompt });
@@ -450,12 +546,14 @@ Specialized UI Tools:
             onComplete?.Invoke(taskHeader, _currentTurnTrace.ToString(), false);
 
             _routingDecision = "manager";
-            string managerRoutePrompt = $"Review the current task: '{_currentTask}'. Which specialized agent is best suited to start this task? Route to 'ui_agent' or 'generic_agent'. Output ONLY valid JSON: {{\"routing\": \"ui_agent\" | \"generic_agent\", \"is_complete\": false, \"feedback\": \"Justification for routing\"}}";
+            string managerRoutePrompt = $"Review the current task: '{_currentTask}'. Which specialized agent is best suited to start this task? Route to 'ui_agent', 'coding_agent', or 'generic_agent'. Output ONLY valid JSON: {{\"routing\": \"ui_agent\" | \"coding_agent\" | \"generic_agent\", \"is_complete\": false, \"feedback\": \"Justification for routing\"}}";
             
-            _history.Add(new ChatMessage { role = "user", content = managerRoutePrompt });
-            SaveHistory();
-
-            ExecuteRequest(model, onComplete);
+            // Do NOT add managerRoutePrompt to the persistent _history to keep the worker's context clean!
+            RefreshSystemContext(model);
+            var managerRouteHistory = new List<ChatMessage>(_history);
+            managerRouteHistory.Add(new ChatMessage { role = "user", content = managerRoutePrompt });
+            
+            ExecuteRequest(model, onComplete, managerRouteHistory);
         }
 
         public void Resume(string model, Action<string, string, bool> onComplete)
@@ -467,6 +565,10 @@ Specialized UI Tools:
         private void ExecuteRequest(string model, Action<string, string, bool> onComplete, List<ChatMessage> customHistory = null)
         {
             Debug.Log($"[Omnisense-MultiAgent] Routing: {_routingDecision} | Task: {_currentTask}");
+            if (_routingDecision == "coding")
+            {
+                Debug.Log($"[Omnisense-MultiAgent] C# Gameplay Coding Specialist Agent starting execution step for sub-task: '{_currentTask}' (Step: {_stepCount + 1}/{MAX_STEPS})");
+            }
             _stepCount++;
             if (_stepCount > MAX_STEPS)
             {
@@ -550,13 +652,50 @@ Specialized UI Tools:
         private void CallOpenAI(string apiKey, string model, Action<string, string, bool> onComplete, List<ChatMessage> activeHistory)
         {
             if (_isAborted) return;
-            // We previously injected an aggressive format reminder here, but it caused the LLM 
-            // to hallucinate endless tool calls because it thought it was forced to output JSON.
             var payloadMessages = new List<ChatMessage>(activeHistory);
-
             int maxTokens = EditorPrefs.GetInt("Omnisense_OpenAI_MaxTokens", 4096);
-            var requestData = new OpenAIRequest { model = model, messages = payloadMessages, max_completion_tokens = maxTokens };
-            string json = JsonUtility.ToJson(requestData);
+            if (_routingDecision == "coding")
+            {
+                maxTokens = Math.Max(maxTokens * 2, 8192);
+                Debug.Log($"[Omnisense-MultiAgent] Coding Agent active. OpenAI output token limit boosted to: {maxTokens}");
+            }
+            
+            // Construct manual JSON array to support Vision Payload Base64 mapping seamlessly
+            string messagesJson = "[";
+            for (int i = 0; i < payloadMessages.Count; i++)
+            {
+                var msg = payloadMessages[i];
+                string escapedContent = EscapeJsonString(msg.content);
+                
+                var match = Regex.Match(msg.content, @"""screenshot_path""\s*:\s*""([^""]+)""");
+                if (match.Success)
+                {
+                    string screenshotPath = match.Groups[1].Value;
+                    string absPath = Path.Combine(Application.dataPath, "..", screenshotPath);
+                    if (File.Exists(absPath))
+                    {
+                        try
+                        {
+                            byte[] bytes = File.ReadAllBytes(absPath);
+                            string base64 = Convert.ToBase64String(bytes);
+                            
+                            messagesJson += "{\"role\":\"" + msg.role + "\",\"content\":[{\"type\":\"text\",\"text\":\"" + escapedContent + "\"},{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:image/png;base64," + base64 + "\"}}]}";
+                            if (i < payloadMessages.Count - 1) messagesJson += ",";
+                            continue;
+                        }
+                        catch (Exception ex)
+                        {
+                            Debug.LogWarning($"[Omnisense] Failed to read screenshot for vision: {ex.Message}");
+                        }
+                    }
+                }
+                
+                messagesJson += "{\"role\":\"" + msg.role + "\",\"content\":\"" + escapedContent + "\"}";
+                if (i < payloadMessages.Count - 1) messagesJson += ",";
+            }
+            messagesJson += "]";
+
+            string json = "{\"model\":\"" + model + "\",\"messages\":" + messagesJson + ",\"max_completion_tokens\":" + maxTokens + "}";
 
             _activeRequest = new UnityWebRequest("https://api.openai.com/v1/chat/completions", "POST");
             UnityWebRequest req = _activeRequest;
@@ -599,18 +738,47 @@ Specialized UI Tools:
             if (_isAborted) return;
             var payloadMessages = new List<ChatMessage>(activeHistory);
             int maxTokens = EditorPrefs.GetInt("Omnisense_Anthropic_MaxTokens", 4096);
+            if (_routingDecision == "coding")
+            {
+                maxTokens = Math.Max(maxTokens * 2, 8192);
+                Debug.Log($"[Omnisense-MultiAgent] Coding Agent active. Anthropic output token limit boosted to: {maxTokens}");
+            }
             
-            // Anthropic expects a slightly different JSON structure
-            string json = "{\"model\":\"" + model + "\",\"max_tokens\":" + maxTokens + ",\"messages\":" + JsonUtility.ToJson(new HistoryWrapper { list = payloadMessages }) + "}";
-            // HistoryWrapper adds a "list" key, but Anthropic wants a raw array. We need a cleaner way.
             string messagesJson = "[";
             for(int i=0; i<payloadMessages.Count; i++) {
-                messagesJson += "{\"role\":\"" + (payloadMessages[i].role == "system" ? "user" : payloadMessages[i].role) + "\",\"content\":\"" + payloadMessages[i].content.Replace("\"", "\\\"").Replace("\n", "\\n") + "\"}";
+                var msg = payloadMessages[i];
+                string role = msg.role == "system" ? "user" : msg.role;
+                string escapedContent = EscapeJsonString(msg.content);
+                
+                var match = Regex.Match(msg.content, @"""screenshot_path""\s*:\s*""([^""]+)""");
+                if (match.Success)
+                {
+                    string screenshotPath = match.Groups[1].Value;
+                    string absPath = Path.Combine(Application.dataPath, "..", screenshotPath);
+                    if (File.Exists(absPath))
+                    {
+                        try
+                        {
+                            byte[] bytes = File.ReadAllBytes(absPath);
+                            string base64 = Convert.ToBase64String(bytes);
+                            
+                            messagesJson += "{\"role\":\"" + role + "\",\"content\":[{\"type\":\"text\",\"text\":\"" + escapedContent + "\"},{\"type\":\"image\",\"source\":{\"type\":\"base64\",\"media_type\":\"image/png\",\"data\":\"" + base64 + "\"}}]}";
+                            if (i < payloadMessages.Count - 1) messagesJson += ",";
+                            continue;
+                        }
+                        catch (Exception ex)
+                        {
+                            Debug.LogWarning($"[Omnisense] Failed to read screenshot for vision: {ex.Message}");
+                        }
+                    }
+                }
+                
+                messagesJson += "{\"role\":\"" + role + "\",\"content\":\"" + escapedContent + "\"}";
                 if(i < payloadMessages.Count-1) messagesJson += ",";
             }
             messagesJson += "]";
             
-            json = "{\"model\":\"" + model + "\",\"max_tokens\":" + maxTokens + ",\"messages\":" + messagesJson + "}";
+            string json = "{\"model\":\"" + model + "\",\"max_tokens\":" + maxTokens + ",\"messages\":" + messagesJson + "}";
 
             _activeRequest = new UnityWebRequest("https://api.anthropic.com/v1/messages", "POST");
             UnityWebRequest req = _activeRequest;
@@ -626,9 +794,7 @@ Specialized UI Tools:
             var operation = req.SendWebRequest();
             operation.completed += (op) => {
                 if (req.result == UnityWebRequest.Result.Success) {
-                    // Anthropic response is different
                     string resp = req.downloadHandler.text;
-                    // Simple extraction for now
                     var match = Regex.Match(resp, "\"text\":\"(.*?)\"", RegexOptions.Singleline);
                     HandleResponse(match.Success ? match.Groups[1].Value.Replace("\\n", "\n").Replace("\\\"", "\"") : resp, model, onComplete);
                 } else if (req.result == UnityWebRequest.Result.ConnectionError || req.result == UnityWebRequest.Result.ProtocolError) {
@@ -648,12 +814,42 @@ Specialized UI Tools:
         {
             if (_isAborted) return;
             int maxTokens = EditorPrefs.GetInt("Omnisense_Gemini_MaxTokens", 4096);
+            if (_routingDecision == "coding")
+            {
+                maxTokens = Math.Max(maxTokens * 2, 8192);
+                Debug.Log($"[Omnisense-MultiAgent] Coding Agent active. Gemini output token limit boosted to: {maxTokens}");
+            }
             
-            // Gemini JSON structure is nested: contents -> parts -> text
             string contentsJson = "[";
             for(int i=0; i<activeHistory.Count; i++) {
-                string role = activeHistory[i].role == "assistant" ? "model" : "user";
-                contentsJson += "{\"role\":\"" + role + "\",\"parts\":[{\"text\":\"" + activeHistory[i].content.Replace("\"", "\\\"").Replace("\n", "\\n") + "\"}]}";
+                var msg = activeHistory[i];
+                string role = msg.role == "assistant" ? "model" : "user";
+                string escapedContent = EscapeJsonString(msg.content);
+                
+                var match = Regex.Match(msg.content, @"""screenshot_path""\s*:\s*""([^""]+)""");
+                if (match.Success)
+                {
+                    string screenshotPath = match.Groups[1].Value;
+                    string absPath = Path.Combine(Application.dataPath, "..", screenshotPath);
+                    if (File.Exists(absPath))
+                    {
+                        try
+                        {
+                            byte[] bytes = File.ReadAllBytes(absPath);
+                            string base64 = Convert.ToBase64String(bytes);
+                            
+                            contentsJson += "{\"role\":\"" + role + "\",\"parts\":[{\"text\":\"" + escapedContent + "\"},{\"inlineData\":{\"mimeType\":\"image/png\",\"data\":\"" + base64 + "\"}}]}";
+                            if (i < activeHistory.Count - 1) contentsJson += ",";
+                            continue;
+                        }
+                        catch (Exception ex)
+                        {
+                            Debug.LogWarning($"[Omnisense] Failed to read screenshot for vision: {ex.Message}");
+                        }
+                    }
+                }
+                
+                contentsJson += "{\"role\":\"" + role + "\",\"parts\":[{\"text\":\"" + escapedContent + "\"}]}";
                 if(i < activeHistory.Count-1) contentsJson += ",";
             }
             contentsJson += "]";
@@ -693,9 +889,48 @@ Specialized UI Tools:
         {
             if (_isAborted) return;
             int maxTokens = EditorPrefs.GetInt("Omnisense_Grok_MaxTokens", 4096);
+            if (_routingDecision == "coding")
+            {
+                maxTokens = Math.Max(maxTokens * 2, 8192);
+                Debug.Log($"[Omnisense-MultiAgent] Coding Agent active. Grok output token limit boosted to: {maxTokens}");
+            }
             var payloadMessages = new List<ChatMessage>(activeHistory);
-            var requestData = new OpenAIRequest { model = model, messages = payloadMessages, max_completion_tokens = maxTokens };
-            string json = JsonUtility.ToJson(requestData);
+            
+            string messagesJson = "[";
+            for (int i = 0; i < payloadMessages.Count; i++)
+            {
+                var msg = payloadMessages[i];
+                string escapedContent = EscapeJsonString(msg.content);
+                
+                var match = Regex.Match(msg.content, @"""screenshot_path""\s*:\s*""([^""]+)""");
+                if (match.Success)
+                {
+                    string screenshotPath = match.Groups[1].Value;
+                    string absPath = Path.Combine(Application.dataPath, "..", screenshotPath);
+                    if (File.Exists(absPath))
+                    {
+                        try
+                        {
+                            byte[] bytes = File.ReadAllBytes(absPath);
+                            string base64 = Convert.ToBase64String(bytes);
+                            
+                            messagesJson += "{\"role\":\"" + msg.role + "\",\"content\":[{\"type\":\"text\",\"text\":\"" + escapedContent + "\"},{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:image/png;base64," + base64 + "\"}}]}";
+                            if (i < payloadMessages.Count - 1) messagesJson += ",";
+                            continue;
+                        }
+                        catch (Exception ex)
+                        {
+                            Debug.LogWarning($"[Omnisense] Failed to read screenshot for vision: {ex.Message}");
+                        }
+                    }
+                }
+                
+                messagesJson += "{\"role\":\"" + msg.role + "\",\"content\":\"" + escapedContent + "\"}";
+                if (i < payloadMessages.Count - 1) messagesJson += ",";
+            }
+            messagesJson += "]";
+
+            string json = "{\"model\":\"" + model + "\",\"messages\":" + messagesJson + ",\"max_completion_tokens\":" + maxTokens + "}";
 
             _activeRequest = new UnityWebRequest("https://api.x.ai/v1/chat/completions", "POST");
             UnityWebRequest req = _activeRequest;
@@ -740,10 +975,48 @@ Specialized UI Tools:
 
             string targetModel = EditorPrefs.GetString("Omnisense_SelfHosted_Model", "llama3:8b");
             int maxTokens = EditorPrefs.GetInt("Omnisense_SelfHosted_MaxTokens", 4096);
+            if (_routingDecision == "coding")
+            {
+                maxTokens = Math.Max(maxTokens * 2, 8192);
+                Debug.Log($"[Omnisense-MultiAgent] Coding Agent active. Self-Hosted output token limit boosted to: {maxTokens}");
+            }
             var payloadMessages = new List<ChatMessage>(activeHistory);
             
-            var requestData = new OpenAIRequest { model = targetModel, messages = payloadMessages, max_completion_tokens = maxTokens };
-            string json = JsonUtility.ToJson(requestData);
+            string messagesJson = "[";
+            for (int i = 0; i < payloadMessages.Count; i++)
+            {
+                var msg = payloadMessages[i];
+                string escapedContent = EscapeJsonString(msg.content);
+                
+                var match = Regex.Match(msg.content, @"""screenshot_path""\s*:\s*""([^""]+)""");
+                if (match.Success)
+                {
+                    string screenshotPath = match.Groups[1].Value;
+                    string absPath = Path.Combine(Application.dataPath, "..", screenshotPath);
+                    if (File.Exists(absPath))
+                    {
+                        try
+                        {
+                            byte[] bytes = File.ReadAllBytes(absPath);
+                            string base64 = Convert.ToBase64String(bytes);
+                            
+                            messagesJson += "{\"role\":\"" + msg.role + "\",\"content\":[{\"type\":\"text\",\"text\":\"" + escapedContent + "\"},{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:image/png;base64," + base64 + "\"}}]}";
+                            if (i < payloadMessages.Count - 1) messagesJson += ",";
+                            continue;
+                        }
+                        catch (Exception ex)
+                        {
+                            Debug.LogWarning($"[Omnisense] Failed to read screenshot for vision: {ex.Message}");
+                        }
+                    }
+                }
+                
+                messagesJson += "{\"role\":\"" + msg.role + "\",\"content\":\"" + escapedContent + "\"}";
+                if (i < payloadMessages.Count - 1) messagesJson += ",";
+            }
+            messagesJson += "]";
+
+            string json = "{\"model\":\"" + targetModel + "\",\"messages\":" + messagesJson + ",\"max_completion_tokens\":" + maxTokens + "}";
 
             _activeRequest = new UnityWebRequest(endpoint, "POST");
             _activeRequest.timeout = 120; // Local models can be slow
@@ -967,6 +1240,7 @@ Specialized UI Tools:
                     _turnToolCount = 0;
                     _isReflecting = false;
                     _consecutiveManagerRejections = 0;
+                    _lastManagerFeedback = "";
                     PruneHistory();
                     
                     _history.Add(new ChatMessage { role = "assistant", content = $"<thought>Manager approved sub-task completion.</thought> {feedback}" });
@@ -1014,10 +1288,25 @@ Specialized UI Tools:
 
                     if (isInitialRouting)
                     {
-                        _routingDecision = nextRouting == "ui_agent" ? "ui" : "generic";
+                        if (nextRouting == "ui_agent" || nextRouting == "ui")
+                        {
+                            _routingDecision = "ui";
+                        }
+                        else if (nextRouting == "coding_agent" || nextRouting == "coding")
+                        {
+                            _routingDecision = "coding";
+                        }
+                        else
+                        {
+                            _routingDecision = "generic";
+                        }
                         Debug.Log($"[Omnisense-Orchestration] Manager routed initial task to: {_routingDecision}");
                         
-                        string routeMsg = $"<b>[Manager] Task routed to specialized {(_routingDecision == "ui" ? "UI Specialist" : "Generic Architect")} Agent.</b>";
+                        string agentName = "Generic Architect";
+                        if (_routingDecision == "ui") agentName = "UI Specialist";
+                        else if (_routingDecision == "coding") agentName = "Unity3D Coding/Scripting Specialist";
+                        
+                        string routeMsg = $"<b>[Manager] Task routed to specialized {agentName} Agent.</b>";
                         _currentTurnTrace.AppendLine(routeMsg);
                         onComplete?.Invoke(routeMsg, _currentTurnTrace.ToString(), false);
                         ExecuteRequest(model, onComplete);
@@ -1025,12 +1314,14 @@ Specialized UI Tools:
                     else
                     {
                         _consecutiveManagerRejections++;
+                        _lastManagerFeedback = feedback;
                         Debug.Log($"[Omnisense-Orchestration] Manager REJECTED Completion. Feedback: {feedback} (Rejections: {_consecutiveManagerRejections})");
                         
                         if (_consecutiveManagerRejections >= 3)
                         {
                             _pendingTasks.Clear();
                             _consecutiveManagerRejections = 0;
+                            _lastManagerFeedback = "";
                             _routingDecision = "end";
                             EditorPrefs.SetBool("Omnisense_AI_PendingResume", false);
                             
@@ -1042,7 +1333,18 @@ Specialized UI Tools:
                             return;
                         }
 
-                        _routingDecision = nextRouting == "ui_agent" ? "ui" : "generic";
+                        if (nextRouting == "ui_agent" || nextRouting == "ui")
+                        {
+                            _routingDecision = "ui";
+                        }
+                        else if (nextRouting == "coding_agent" || nextRouting == "coding")
+                        {
+                            _routingDecision = "coding";
+                        }
+                        else
+                        {
+                            _routingDecision = "generic";
+                        }
                         _history.Add(new ChatMessage { role = "user", content = $"[Manager Audit Failed]: The Manager detected that the task is incomplete. Feedback: {feedback}\n\nSYSTEM DIRECTIVE: Review the feedback above, plan how to resolve the missing requirements, and immediately apply the changes. You must write/edit code or hierarchy to complete the task." });
                         SaveHistory();
                         
@@ -1187,7 +1489,20 @@ Specialized UI Tools:
                     _isManagerEvaluating = true;
                     _lastWorkerResponse = response;
                     
-                    string managerAuditPrompt = $"MANAGER AUDIT: You are the Manager Agent. Review the chat history and evaluate the Worker's execution of the CURRENT SUB-TASK: '{_currentTask}'. Did the worker successfully complete this specific sub-task? Do NOT evaluate against the entire user request, ONLY evaluate if this specific sub-task is done. Do not be overly pedantic about terminology. If the worker provides tool output (such as InspectNode) that reasonably shows the requested change exists, approve the task. Remember that Unity Prefab Assets are often displayed as 'GameObjects' or '[Prefab Asset]' in tool outputs. Output ONLY valid JSON in this exact format: {{\"is_complete\": true/false, \"feedback\": \"If false, list exactly what is missing from THIS sub-task. If true, summarize the success.\"}}";
+                    _routingDecision = "manager";
+                    RefreshSystemContext(model);
+                    SaveHistory();
+                    
+                    string managerAuditPrompt = $"MANAGER AUDIT: You are the Manager Agent. Review the chat history and evaluate the Worker's execution of the CURRENT SUB-TASK: '{_currentTask}'. Did the worker successfully complete this specific sub-task? Do NOT evaluate against the entire user request, ONLY evaluate if this specific sub-task is done. Do not be overly pedantic about terminology. If the worker provides tool output (such as InspectNode) that reasonably shows the requested change exists, approve the task.";
+                    
+                    if (_consecutiveManagerRejections > 0)
+                    {
+                        managerAuditPrompt += $"\n\n[DEATH SPIRAL WARNING]: This task has already been rejected {_consecutiveManagerRejections} times. To prevent a death loop, you MUST be less pedantic and highly pragmatic.";
+                        managerAuditPrompt += "\n- If the worker has made a substantial, honest effort and the core functionality is mostly there, mark 'is_complete' as true.";
+                        managerAuditPrompt += "\n- If you must reject again, your 'feedback' MUST guide the worker with a clear, alternative strategy or hint to resolve the block.";
+                    }
+                    
+                    managerAuditPrompt += "\n\nOutput ONLY valid JSON in this exact format:\n{\"is_complete\": true/false, \"feedback\": \"...\"}";
                     
                     var managerHistory = new List<ChatMessage>(_history);
                     managerHistory.Add(new ChatMessage { role = "user", content = managerAuditPrompt });
@@ -1439,6 +1754,11 @@ Specialized UI Tools:
                 {
                     result = MCPToolRegistry.CreateUIPanel(p.parentPath, p.name);
                     onComplete?.Invoke(uiResponse + "\n\n[System]: Instantiating UI Panel...", _currentTurnTrace.ToString(), false);
+                }
+                else if (toolCall.method == "scene/capture_ui_screenshot")
+                {
+                    result = MCPToolRegistry.CaptureUIScreenshot(p.destinationAssetPath);
+                    onComplete?.Invoke(uiResponse + "\n\n[System]: Capturing Game View UI Screenshot...", _currentTurnTrace.ToString(), false);
                 }
                 else if (toolCall.method == "ui/create_text")
                 {
@@ -1727,6 +2047,16 @@ Specialized UI Tools:
         {
             var match = Regex.Match(json, @"""" + fieldName + @"""" + @"\s*:\s*""((?:[^""\\]|\\.)*)""", RegexOptions.IgnoreCase);
             return match.Success ? match.Groups[1].Value : null;
+        }
+
+        private static string EscapeJsonString(string value)
+        {
+            if (string.IsNullOrEmpty(value)) return "";
+            return value.Replace("\\", "\\\\")
+                        .Replace("\"", "\\\"")
+                        .Replace("\n", "\\n")
+                        .Replace("\r", "\\r")
+                        .Replace("\t", "\\t");
         }
     }
 }
