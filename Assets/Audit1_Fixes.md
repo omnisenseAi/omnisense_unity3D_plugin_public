@@ -189,3 +189,53 @@ When the Planner or Manager returns non-standard JSON, the parser catches the er
 *   `[Omnisense-Orchestration] Failed to parse Execution Plan JSON: <exception>. Raw response was: ...`
 *   `[Omnisense-Orchestration] Failed to parse Manager Decision JSON: <exception>. Raw response was: ...`
 
+---
+
+## 🔥 Critical Bug Fix: Domain Reload Death Spiral
+
+### Root Cause
+When the Coding Agent wrote a `.cs` file via the `project/edit_file` tool, Unity's `AssetDatabase` triggered an **automatic Domain Reload**. This destroyed all in-memory orchestration state (`_pendingTasks`, `_stepCount`, `_currentTask`, `_routingDecision`, etc.) mid-execution. `ResumeAIProcess` would then reconstruct a skeleton state from `EditorPrefs` and restart from the **Planner** — causing an infinite loop:
+
+> Planner → "Edit Enemy.cs" → Write File → Unity Reload → Planner → "Edit Enemy.cs" → ...
+
+This produced the **15,000+ line log** death spiral observed in testing.
+
+### Fix in `AIOrchestrator.cs`
+
+**Strategy**: Lock assembly reloading for the entire duration of a prompt turn. Unity writes files to disk but cannot reload assemblies (and thus cannot destroy our state) until we explicitly unlock. We unlock + refresh only after the Manager approves all tasks via `FinishTurn()`.
+
+#### Key Changes:
+
+**1. New state fields**
+```csharp
+private bool _assembliesLocked = false;
+private bool _scriptEditOccurred = false;
+```
+
+**2. Lock at turn start (`ProcessPrompt`)**
+```csharp
+EditorApplication.LockReloadAssemblies();
+_assembliesLocked = true;
+```
+
+**3. `FinishTurn()` — centralised unlock point**
+All exit paths (Manager approval, max-step limit, loop detection, 3× rejections, conceptual turns) now funnel through `FinishTurn()`:
+```csharp
+private void FinishTurn(string message, string trace, Action<string, string, bool> onComplete)
+{
+    UnlockAssemblies(); // releases lock + calls AssetDatabase.Refresh() if needed
+    onComplete?.Invoke(message, trace, true);
+}
+```
+
+**4. Abort also unlocks** — prevents permanently locked assemblies if user cancels mid-turn.
+
+**5. Removed polling wait loop** — the old `while (isCompiling) await Task.Delay(500)` loop is gone. Since assemblies are locked, there is nothing to wait for.
+
+### Debug Log Tags
+| Log Tag | Meaning |
+|---|---|
+| `[Omnisense-DomainReload] Assemblies LOCKED` | Lock acquired at prompt start |
+| `[Omnisense-DomainReload] Script edit detected. Deferred...` | `.cs` written; refresh deferred |
+| `[Omnisense-DomainReload] Assemblies UNLOCKED` | Turn complete; lock released |
+| `[Omnisense-DomainReload] triggering AssetDatabase.Refresh()` | Compilation now allowed |

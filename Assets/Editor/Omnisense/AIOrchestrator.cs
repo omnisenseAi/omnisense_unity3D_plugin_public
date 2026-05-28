@@ -46,6 +46,13 @@ namespace Omnisense
         private UnityWebRequest _activeRequest;
         private bool _isAborted = false;
 
+        // ── Domain Reload Lock (Death-Spiral Prevention) ──
+        // We lock assembly reloading for the entire duration of a prompt turn so that
+        // Unity cannot destroy our in-memory state mid-execution. We unlock (and
+        // optionally refresh the AssetDatabase) only when the turn is fully finished.
+        private bool _assembliesLocked = false;
+        private bool _scriptEditOccurred = false;
+
         // ── Isolated Context Manager (W4 fix) ──
         private AgentContextManager _context = new AgentContextManager();
 
@@ -190,7 +197,19 @@ namespace Omnisense
             _lastWorkerResponse = "";
             _consecutiveManagerRejections = 0;
             _routingDecision = "planner";
+            _scriptEditOccurred = false;
             OmnisenseUndoManager.StartTurn(turnId);
+
+            // ── Domain Reload Lock ──
+            // Lock assembly reloading for the entire turn so Unity cannot destroy our
+            // in-memory state when the Coding Agent writes a .cs file.  We pair every
+            // lock with exactly one Unlock inside FinishTurn / Abort.
+            if (!_assembliesLocked)
+            {
+                EditorApplication.LockReloadAssemblies();
+                _assembliesLocked = true;
+                Debug.Log("[Omnisense-DomainReload] Assemblies LOCKED. Domain reloads suppressed for this turn.");
+            }
 
             // W4: Set user request in the isolated context manager
             _context.SetUserRequest(prompt);
@@ -198,6 +217,34 @@ namespace Omnisense
 
             onComplete?.Invoke("[System]: Analyzing request and classifying intent...", _currentTurnTrace.ToString(), false);
             ExecuteRequest(model, onComplete);
+        }
+
+        /// <summary>
+        /// Centralised turn-end helper.  Always call this instead of invoking onComplete
+        /// with isDone=true directly, so that assembly unlock + AssetDatabase refresh
+        /// happen exactly once per turn.
+        /// </summary>
+        private void FinishTurn(string message, string trace, Action<string, string, bool> onComplete)
+        {
+            UnlockAssemblies();
+            onComplete?.Invoke(message, trace, true);
+        }
+
+        private void UnlockAssemblies()
+        {
+            if (_assembliesLocked)
+            {
+                EditorApplication.UnlockReloadAssemblies();
+                _assembliesLocked = false;
+                Debug.Log("[Omnisense-DomainReload] Assemblies UNLOCKED.");
+
+                if (_scriptEditOccurred)
+                {
+                    Debug.Log("[Omnisense-DomainReload] Script edits detected — triggering AssetDatabase.Refresh() now.");
+                    AssetDatabase.Refresh();
+                    _scriptEditOccurred = false;
+                }
+            }
         }
 
         public void Resume(string model, Action<string, string, bool> onComplete)
@@ -216,6 +263,8 @@ namespace Omnisense
                 _activeRequest.Abort();
                 _activeRequest = null;
             }
+            // Make sure we don't leave assemblies permanently locked
+            UnlockAssemblies();
         }
 
         // ════════════════════════════════════════════════════════════
@@ -264,10 +313,10 @@ namespace Omnisense
             {
                 string limitMsg = $"\n\n[System Warning]: Maximum turn iterations ({MAX_STEPS}) reached for this sub-task. To prevent an infinite loop, I have paused execution.";
                 _currentTurnTrace.AppendLine(limitMsg);
-                onComplete?.Invoke(limitMsg, _currentTurnTrace.ToString(), true);
                 _context.AddWorkerMessage("assistant", "I have reached the execution limit for this sub-task. Pausing for user feedback.");
                 SaveState();
                 EditorPrefs.SetBool("Omnisense_AI_PendingResume", false);
+                FinishTurn(limitMsg, _currentTurnTrace.ToString(), onComplete);
                 return;
             }
 
@@ -560,8 +609,9 @@ namespace Omnisense
                     : $"<color=#00FF00><b>[Manager Approved]: All tasks complete.</b></color>\n{feedback}";
 
                 _currentTurnTrace.AppendLine($"[Manager Approved]: All tasks complete. {feedback}");
-                onComplete?.Invoke(finalResult, _currentTurnTrace.ToString(), true);
                 EditorPrefs.SetBool("Omnisense_AI_PendingResume", false);
+                FinishTurn(finalResult, _currentTurnTrace.ToString(), onComplete);
+                return;
             }
         }
 
@@ -599,8 +649,8 @@ namespace Omnisense
                     EditorPrefs.SetBool("Omnisense_AI_PendingResume", false);
 
                     _currentTurnTrace.AppendLine("\n[System Intervention]: Manager rejected 3 times. Paused.");
-                    onComplete?.Invoke($"<color=#FF5555><b>[System Intervention]:</b></color> The Manager has rejected this task 3 times consecutively. Paused to prevent a death loop.\n\nFeedback: {feedback}", _currentTurnTrace.ToString(), true);
                     SaveState();
+                    FinishTurn($"<color=#FF5555><b>[System Intervention]:</b></color> The Manager has rejected this task 3 times consecutively. Paused to prevent a death loop.\n\nFeedback: {feedback}", _currentTurnTrace.ToString(), onComplete);
                     return;
                 }
 
@@ -702,8 +752,13 @@ namespace Omnisense
             {
                 result = ToolDispatcher.Dispatch(toolCall, toolJson);
 
+                // Track whether a script file was edited so we can refresh after unlock
                 if (ToolDispatcher.IsCompilationTrigger(toolCall.method))
-                    onComplete?.Invoke(uiResponse + "\n\n[System]: File written. Waiting for Unity to compile...", _currentTurnTrace.ToString(), false);
+                {
+                    _scriptEditOccurred = true;
+                    Debug.Log("[Omnisense-DomainReload] Script edit detected. AssetDatabase.Refresh() deferred until turn end (assemblies are locked).");
+                    onComplete?.Invoke(uiResponse + "\n\n[System]: Script file written. Compilation deferred until AI turn completes (reload lock active).", _currentTurnTrace.ToString(), false);
+                }
             }
             catch (Exception ex)
             {
@@ -740,18 +795,10 @@ namespace Omnisense
             if (!ToolDispatcher.IsCompilationTrigger(toolCall.method))
                 onComplete?.Invoke(uiResponse + "\n\n[System]: Tool executed. Analyzing results...", _currentTurnTrace.ToString(), false);
 
-            // Wait for Unity compilation if needed
-            bool wasCompiling = EditorApplication.isCompiling || EditorApplication.isUpdating;
-            if (wasCompiling)
-            {
-                _currentTurnTrace.AppendLine("[System]: Waiting for Unity to finish compiling...");
-                onComplete?.Invoke(uiResponse + "\n\n[System]: Waiting for Unity to finish compiling...", _currentTurnTrace.ToString(), false);
-                while (EditorApplication.isCompiling || EditorApplication.isUpdating)
-                    await System.Threading.Tasks.Task.Delay(500);
-                _currentTurnTrace.AppendLine("[System]: Compilation finished. Resuming execution...");
-                onComplete?.Invoke(uiResponse + "\n\n[System]: Compilation finished. Resuming execution...", _currentTurnTrace.ToString(), false);
-            }
-
+            // NOTE: No compilation-wait loop here.
+            // Assemblies are locked for the entire turn (LockReloadAssemblies was called in
+            // ProcessPrompt). Unity will NOT reload mid-execution. The AssetDatabase.Refresh()
+            // and UnlockReloadAssemblies() calls happen in FinishTurn once the Manager approves.
             await System.Threading.Tasks.Task.Yield();
             ExecuteRequest(model, onComplete);
         }
@@ -765,7 +812,7 @@ namespace Omnisense
             if (_isConceptualTurn)
             {
                 Debug.Log("[Omnisense] Conceptual turn complete.");
-                onComplete?.Invoke(response, _currentTurnTrace.ToString(), true);
+                FinishTurn(response, _currentTurnTrace.ToString(), onComplete);
                 return;
             }
 
@@ -833,8 +880,8 @@ namespace Omnisense
                 _lastThreeResponses.Clear();
                 string loopMsg = "\n\n[System Intervention]: Identical consecutive worker responses detected. Pausing to prevent cognitive death loop.";
                 _currentTurnTrace.AppendLine(loopMsg);
-                onComplete?.Invoke($"<color=#FF5555><b>[System Intervention]:</b></color> Identical consecutive worker responses detected. Pausing.\n\nResponse:\n{response}", _currentTurnTrace.ToString(), true);
                 EditorPrefs.SetBool("Omnisense_AI_PendingResume", false);
+                FinishTurn($"<color=#FF5555><b>[System Intervention]:</b></color> Identical consecutive worker responses detected. Pausing.\n\nResponse:\n{response}", _currentTurnTrace.ToString(), onComplete);
                 return true;
             }
             return false;
