@@ -115,6 +115,8 @@ namespace Omnisense
             if (!string.IsNullOrEmpty(_dnaContent))
                 ctx.Add(Sys($"[PROJECT DNA]\n{_dnaContent}"));
             ctx.Add(new LLMMessage { role = "user", content = userRequest });
+
+            Debug.Log($"[Omnisense-Context] Built PLANNER Context: {ctx.Count} messages (Request: {userRequest?.Length ?? 0} chars, DNA: {_dnaContent?.Length ?? 0} chars)");
             return ctx;
         }
 
@@ -155,6 +157,8 @@ namespace Omnisense
 
             // Manager query
             ctx.Add(new LLMMessage { role = "user", content = managerQuery });
+
+            Debug.Log($"[Omnisense-Context] Built MANAGER Context: {ctx.Count} messages (Active Sub-Task: '{_currentSubTask}', Completed Summaries: {_completedSummaries.Count}, Worker Summary Present: {!string.IsNullOrEmpty(workerSummary)})");
             return ctx;
         }
 
@@ -198,6 +202,7 @@ namespace Omnisense
             foreach (var msg in _workerHistory)
                 ctx.Add(msg);
 
+            Debug.Log($"[Omnisense-Context] Built WORKER Context ({routingDecision}): {ctx.Count} messages (Worker History: {_workerHistory.Count} messages, Rejections: {rejections}, Sub-Task: '{_currentSubTask}')");
             return ctx;
         }
 

@@ -38,6 +38,11 @@ namespace Omnisense
         {
             CurrentTurnId = turnId;
             if (!Directory.Exists(BackupDir)) Directory.CreateDirectory(BackupDir);
+
+            // Clean up old backups to prevent infinite disk bloating (keep last 15 turns)
+            var db = LoadDatabase();
+            CleanOldBackups(db);
+            SaveDatabase(db);
         }
 
         public static void RegisterFileBackup(string filePath, bool isNewFile)
@@ -134,6 +139,36 @@ namespace Omnisense
         {
             if (!Directory.Exists(BackupDir)) Directory.CreateDirectory(BackupDir);
             File.WriteAllText(DbPath, JsonUtility.ToJson(db));
+        }
+
+        private static void CleanOldBackups(UndoDatabase db)
+        {
+            int maxTurnsToKeep = 15;
+            if (db.turns.Count <= maxTurnsToKeep) return;
+
+            int removeCount = db.turns.Count - maxTurnsToKeep;
+            for (int i = 0; i < removeCount; i++)
+            {
+                var turn = db.turns[i];
+                if (turn.fileBackups != null)
+                {
+                    foreach (var backup in turn.fileBackups)
+                    {
+                        try
+                        {
+                            if (!string.IsNullOrEmpty(backup.backupPath) && File.Exists(backup.backupPath))
+                            {
+                                File.Delete(backup.backupPath);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Debug.LogWarning($"[Omnisense] Failed to delete old backup file '{backup.backupPath}': {ex.Message}");
+                        }
+                    }
+                }
+            }
+            db.turns.RemoveRange(0, removeCount);
         }
     }
 }

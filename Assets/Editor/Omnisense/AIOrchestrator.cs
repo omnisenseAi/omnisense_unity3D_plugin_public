@@ -341,6 +341,19 @@ namespace Omnisense
             _activeRequest = provider.BuildRequest(apiKey, model, context, maxTokens);
             UnityWebRequest req = _activeRequest;
 
+            if (req.uploadHandler != null && req.uploadHandler.data != null)
+            {
+                try
+                {
+                    string reqBody = Encoding.UTF8.GetString(req.uploadHandler.data);
+                    Debug.Log($"[Omnisense-Debug] Sending payload to {model}:\n{reqBody}");
+                }
+                catch (Exception e)
+                {
+                    Debug.LogWarning($"[Omnisense-Debug] Failed to read request body bytes: {e.Message}");
+                }
+            }
+
             Debug.Log($"[Omnisense] Sending request to {model} ({context.Count} messages in context)...");
             var operation = req.SendWebRequest();
             operation.completed += (op) =>
@@ -349,8 +362,10 @@ namespace Omnisense
 
                 if (req.result == UnityWebRequest.Result.Success)
                 {
-                    Debug.Log("[Omnisense] Received successful response from API.");
-                    string responseText = provider.ParseResponseContent(req.downloadHandler.text);
+                    string rawResponse = req.downloadHandler.text;
+                    Debug.Log($"[Omnisense-Debug] Received successful raw response from API ({model}):\n{rawResponse}");
+                    string responseText = provider.ParseResponseContent(rawResponse);
+                    Debug.Log($"[Omnisense-Debug] Parsed response content:\n{responseText}");
                     HandleResponse(responseText, model, onComplete);
                 }
                 else if (req.result == UnityWebRequest.Result.ConnectionError || req.result == UnityWebRequest.Result.ProtocolError)
@@ -421,7 +436,10 @@ namespace Omnisense
                         }
                     }
                 }
-                catch { Debug.LogWarning("[Omnisense] Failed to parse Execution Plan JSON. Defaulting to single task."); }
+                catch (Exception ex)
+                {
+                    Debug.LogWarning($"[Omnisense-Orchestration] Failed to parse Execution Plan JSON: {ex.Message}. Raw response was:\n{response}");
+                }
 
                 if (_pendingTasks.Count == 0)
                     _pendingTasks.Enqueue("Execute the user's request.");
@@ -463,9 +481,9 @@ namespace Omnisense
                         }
                     }
                 }
-                catch
+                catch (Exception ex)
                 {
-                    Debug.LogWarning("[Omnisense] Failed to parse Manager Decision. Defaulting to standard routing.");
+                    Debug.LogWarning($"[Omnisense-Orchestration] Failed to parse Manager Decision JSON: {ex.Message}. Raw response was:\n{response}");
                 }
 
                 if (isComplete || nextRouting == "end")

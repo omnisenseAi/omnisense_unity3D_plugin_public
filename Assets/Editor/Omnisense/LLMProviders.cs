@@ -173,7 +173,10 @@ namespace Omnisense
                     return response.choices[0].message.content;
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[Omnisense-LLM] Failed to parse OpenAI-compatible response via DTO: {ex.Message}");
+            }
             return "Error parsing response content: " + rawJson;
         }
 
@@ -214,7 +217,10 @@ namespace Omnisense
                     return response.content[0].text;
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[Omnisense-LLM] Failed to parse Anthropic response via DTO: {ex.Message}. Falling back to Regex.");
+            }
 
             // Fallback: try regex for deeply nested or unexpected formats
             var match = Regex.Match(rawJson, "\"text\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"", RegexOptions.Singleline);
@@ -297,7 +303,10 @@ namespace Omnisense
                     if (parts != null && parts.Count > 0) return parts[0].text;
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[Omnisense-LLM] Failed to parse Gemini response via DTO: {ex.Message}. Falling back to Regex.");
+            }
 
             // Fallback regex
             var match = Regex.Match(rawJson, "\"text\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"", RegexOptions.Singleline);

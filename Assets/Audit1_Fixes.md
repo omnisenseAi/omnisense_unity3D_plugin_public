@@ -13,6 +13,7 @@ This document records the extensive architectural refactoring of the OmniSense U
 | **W3** | **`ChatMessage` Name Collision** | 🟡 High | Renamed the LLM-oriented model payload class to `LLMMessage` inside `LLMProviders.cs`, separating it cleanly from UI-oriented `ChatMessage` in `OmnisenseSessionManager.cs`. | Resolved type ambiguity and future compile-time conflicts in the `Omnisense` namespace. |
 | **W4** | **Shared History (Context Pollution)** | 🔴 Critical | Implemented `AgentContextManager.cs` to manage separate, completely isolated histories for each agent role (Planner, Manager, Workers). | **Eliminated the multi-agent "death spiral" loop.** Workers only see their active tasks and tool chain, and the Manager only sees high-level progress summaries. |
 | **W8** | **Regex API Response Parsing** | 🟡 High | Implemented proper typed JSON Data Transfer Objects (DTOs) deserialized via `JsonUtility` for OpenAI, Anthropic, Gemini, Grok, and Self-Hosted endpoints. | Robust API response parsing that handles nested structures and escaped strings without breaking. |
+| **Undo** | **No Undo Backup Cleanup (Disk Accumulation)** | 🟡 Medium | Implemented a sliding window cleanup policy in `OmnisenseUndoManager.cs` keeping only the last 15 turns and deleting older turns' `.bak` files from disk. | Prevents silent disk bloating and ensures disk hygiene during long developer workflows. |
 
 ---
 
@@ -125,6 +126,13 @@ By creating a dedicated `LLMMessage` DTO model in `LLMProviders.cs` and reservin
 
 ---
 
+### 5. Resolve Undo Backup Accumulation (Disk Bloating)
+Backups of files modified or created during each turn accumulated indefinitely in the `UserSettings/OmnisenseUndo/` folder. We implemented a sliding window cleanup policy in `OmnisenseUndoManager.cs`:
+*   On starting a new turn (`StartTurn`), the manager loads the database and checks if the total turns exceed `15`.
+*   If exceeded, it deletes the associated `.bak` files for the oldest turns from the disk and removes their entries from the database, maintaining high disk hygiene without manual developer intervention.
+
+---
+
 ## Verification & Compilation Status
 
 We executed a compiler verification using `dotnet build` against the project assembly `Omnisense.Editor.csproj`. 
@@ -145,3 +153,39 @@ Build succeeded.
 ```
 
 The system is now fully structured, compile-safe, and highly robust against context drift and multi-agent execution loops!
+
+---
+
+## 🛠️ Debug & Troubleshooting Enhancements
+
+To empower developer-side troubleshooting and diagnostics, we added rich, unified logging channels across the newly restructured orchestration stack. These logs allow deep inspection of LLM requests and multi-agent behavior from the Unity Console:
+
+### 1. Unified Network Payload Logging (`AIOrchestrator.cs`)
+Every single outbound LLM request and raw JSON response can now be fully inspected inside the Unity Console.
+*   **Request payloads**: When a call is sent to any model, the exact serialized request JSON (including the full message list, vision screenshots in base64, parameters, and token caps) is printed:
+    `[Omnisense-Debug] Sending payload to <model_name>: ...`
+*   **Raw API response**: When a response is received, the raw, unparsed JSON string is logged:
+    `[Omnisense-Debug] Received successful raw response from API (<model_name>): ...`
+*   **Parsed response content**: The exact extracted message text is outputted directly before being routed to the state machine:
+    `[Omnisense-Debug] Parsed response content: ...`
+
+### 2. Isolated Context-Building Logs (`AgentContextManager.cs`)
+Because context is now completely isolated, knowing what went into each agent's brain is critical. We added logging inside each specialized context builder:
+*   **PLANNER**: Logs message count, user request length, and injected DNA guidelines size:
+    `[Omnisense-Context] Built PLANNER Context: X messages (Request: Y chars, DNA: Z chars)`
+*   **MANAGER**: Logs completed sub-task summary counts and the presence/absence of worker summaries:
+    `[Omnisense-Context] Built MANAGER Context: X messages (Active Sub-Task: '...', Completed Summaries: Y, Worker Summary Present: true/false)`
+*   **WORKERS (UI/Coding/Generic)**: Logs active task name, isolated worker turn history sizes, and active rejections count:
+    `[Omnisense-Context] Built WORKER Context (<agent_type>): X messages (Worker History: Y messages, Rejections: Z, Sub-Task: '...')`
+
+### 3. API Error Deserialization Warnings (`LLMProviders.cs`)
+When `JsonUtility` fails to parse a nested JSON block from Anthropic or Gemini, the exact exception message is printed rather than failing silently, allowing developers to see exactly why DTO mapping succeeded or failed before the regex parser falls back:
+*   `[Omnisense-LLM] Failed to parse OpenAI-compatible response via DTO: <exception_details>`
+*   `[Omnisense-LLM] Failed to parse Anthropic response via DTO: <exception_details>. Falling back to Regex.`
+*   `[Omnisense-LLM] Failed to parse Gemini response via DTO: <exception_details>. Falling back to Regex.`
+
+### 4. Structured Router & Planner Parsing Exceptions (`AIOrchestrator.cs`)
+When the Planner or Manager returns non-standard JSON, the parser catches the error and logs the raw output, identifying malformed structures instantly:
+*   `[Omnisense-Orchestration] Failed to parse Execution Plan JSON: <exception>. Raw response was: ...`
+*   `[Omnisense-Orchestration] Failed to parse Manager Decision JSON: <exception>. Raw response was: ...`
+
