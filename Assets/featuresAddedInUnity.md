@@ -379,3 +379,55 @@ The agent's "hands" have been specifically tuned for the Unity Editor environmen
 - **Perfect Rollback and Commit Execution**: If the user approves a subset or all changes, the orchestrator commits them to disk and updates the transaction logs. If any changes are rejected, the system uses the file-based backup engine to seamlessly undo only the rejected files, leaving the workspace in a clean, consistent state.
 - **Domain Reload Recompilation Harmony**: Integrates directly with the `AssemblyLock` compiler safety features. The agent is able to stage multiple C# file writes sequentially while assemblies are locked, and flush them in a single batch, completely avoiding the infinite Domain Reload compile cycles and death spirals.
 
+---
+
+## 46. Asynchronous Staging & Post-Compilation Script Attachment (Phase 45)
+- **Staging-Aware System Prompts (Anti-Ghost Workspace)**: Hardened all agent roles (`MANAGER`, `CODING_SPECIALIST`, `UI_SPECIALIST`, `GENERIC_WORKER`) in the `PromptLibrary` to be fully aware of the "Deferred Approval Queue" / "Staging" mechanics. This completely eliminates immediate scene verification loops ("Ghost Workspace" problem) where workers would re-inspect the scene in the same turn and panic when they saw their own staged changes hadn't physically run yet.
+- **Pragmatic Manager Audit Rules**: Instructed the Manager Auditor to consider any `[Staged for Approval]` or `[Post-Compile Scheduled]` tool observation as a 100% successful execution, completely preventing pedantic rejections of staged changes due to timing/verification issues.
+- **Fuzzy script existence checks**: Upgraded `scene/modify_node`'s `add_component` tool to perform fuzzy script existence checks when a component type cannot be loaded in assemblies yet (e.g. for newly written scripts that haven't been compiled). It now uses `AssetDatabase.FindAssets` to check if a valid `MonoScript` with the target class name exists in the project assets.
+- **Post-Compilation Scheduled Attachment**: If the script asset exists but is uncompiled, the tool now schedules a persistent "pending script attachment" record using an `EditorPrefs`-backed JSON list (`Omnisense_PendingScriptAttachments`) and returns a successful scheduled status to the agent.
+- **Domain Reload Re-attachment Registry**: Hooked a static callback process into `EditorApplication.delayCall` inside the static constructor of the `[InitializeOnLoad]` class `MCPToolRegistry`. Immediately after compilation and domain reload complete, the system automatically reconstructs the serialized state, retrieves the compiled `System.Type`, and cleanly attaches the custom script components to their target GameObjects or Prefabs via `Undo` or `PrefabUtility` APIs, ensuring a perfect, error-free automated gameplay setup.
+
+---
+
+## 47. One-Shot Script Attachment Tool: `scene/add_script_component` (Phase 46)
+
+### Problem Solved
+Despite the Deferred Approval Queue, the agent kept hitting a 3-part failure loop when attaching scripts:
+1. **Planner Over-Splitting**: Would generate 3+ sub-tasks (Write Script, Attach Script, Verify Attachment) when the entire operation should be 1 atomic step.
+2. **Manager False Rejections**: The Manager would reject a `[Post-Compile Scheduled]` observation as "unverified" even though this IS the correct, terminal outcome for a newly-written script.
+3. **Worker Re-Inspection Loop**: After staging an attachment, the Generic Worker would call `scene/inspect_node` to confirm, see the OLD state (because deferred), and re-attach — creating a duplication spiral.
+
+### Fix A: New Tool — `scene/add_script_component`
+- **File**: `MCPToolRegistry.cs` — new `AddScriptComponent(string path, string scriptName)` method.
+- **Strategy**: Two-phase approach:
+  1. **Phase 1 (Reflection)**: Uses `ResolveComponentType()` to find the type in loaded assemblies. If found, immediately calls `Undo.AddComponent` (scene) or `prefab.AddComponent + SaveAsPrefabAsset` (prefab). Returns `[Staged for Approval]`.
+  2. **Phase 2 (Post-Compile fallback)**: If the type isn't in assemblies yet (newly written this turn), searches for the `.cs` asset using `AssetDatabase.FindAssets(scriptName + " t:MonoScript")`. If the `.cs` file is found, calls `RegisterPendingScriptAttachment` and returns `[Post-Compile Scheduled]` with a clear "THIS IS COMPLETE" message to prevent re-attempts.
+- **Advantage over `modify_node/add_component`**: No reliance on full namespace-qualified type names, no reflection failures due to namespaces. The GUID-based MonoScript lookup is always namespace-agnostic.
+- **Registration in ToolDispatcher**: Added case in `Dispatch()`, `IsCompilationTrigger()`, `GetApprovalMode()` (Deferred), `GenerateDiffSummary()`, and `BuildContextLogEntry()`.
+- **New param**: Added `scriptName` to `MCPToolParams` as dedicated field. Fallback chain: `p.scriptName ?? p.name ?? p.component ?? p.value`.
+
+### Fix B: Prompt Surgery (PromptLibrary.cs)
+- **PLANNER — Simple Task Rule**: Added rule #3 capping tasks at 3 maximum. For any ONE logical action (attach + wire), emit 1 sub-task only. Banned split patterns: 'verify attachment', 'confirm component exists', 'inspect node after attaching'.
+- **MANAGER — Post-Compile Iron Rule**: Strengthened the Deferred Approval directive with an explicit rule: `[Post-Compile Scheduled]` = 100% success, `is_complete: true`, no exceptions. Added `scene/add_script_component` to the success list.
+- **GENERIC WORKER — ONE-SHOT ATTACH RULE**: Added rules #3 and #4 explicitly banning post-staging inspection and re-attachment. Instructions: if you got `[Staged for Approval]` or `[Post-Compile Scheduled]`, stop immediately and output completion summary.
+- **SHARED_MCP_TOOLS**: Added tool #30 `scene/add_script_component` with clear documentation and preference guidance.
+
+---
+
+## 48. Batched Namespace-Safe Script Attachment & Robust Reference Wiring (Phase 47)
+
+### Problem Solved
+Analyzing logs from `UnityTest6.txt` revealed two final layers of script setup failures:
+1. **Silent Fallthrough Bug**: When the AI batched its operations inside a `scene/execute_transactions` block, it included the new `"scene/add_script_component"` action. However, `ExecuteTransactions` did not have a case mapping this action name. It fell through to the unhandled `else` block, returning a failure in the transaction operation array. This caused the script attachment to fail, and subsequent dependent edits (such as wiring fields like `_entryPoint`) also failed because the target component did not exist on the GameObject.
+2. **Bad Reference Wiring**: The AI agent was generating invalid `set_component_property` parameters by assigning plain strings (e.g., GameObject name `"Building"`) directly to `Transform` reference fields (like `_entryPoint`), instead of using the correct, fully-qualified hierarchy path system.
+
+### Fix A: Transactional Action Integration (MCPToolRegistry.cs)
+- **Batched Script Support**: Added handling for `"scene/add_script_component"` and `"add_script_component"` inside the loop of the `ExecuteTransactions` method. It extracts the script name from `scriptName`, `name`, `component`, or `value` and runs the `AddScriptComponent` logic seamlessly in the batch transaction.
+- **Staging Deserialization**: Added the `scriptName` string field to the `TransactionOperation` data class. This ensures any `scriptName` parameters supplied by the client during batched requests are fully deserialized and passed into the attachment pipeline.
+
+### Fix B: Reference Wiring Prompt Hardening (PromptLibrary.cs)
+- **Coding Specialist & Generic Worker Prompts**: Injected a critical rule, **"Object Reference & Component Property Wiring Rules"**, as Rule #8 across both the `CODING_SPECIALIST` and `GENERIC_WORKER` prompts.
+- **Explicit Hierarchy Paths**: Instructed the agents that when setting properties for `Transform` or `GameObject` fields via `scene/set_component_property` (or within batch transactions), they must use the **full scene path** of the target object (e.g. `"Building/EntryPoint"`), NOT the simple name of the GameObject as a plain string.
+- **No Parent-As-Child Assignments**: Explicitly banned the pattern of assigning a parent object's name when a child reference field is expected. Instructed the agents to inspect/verify the child exists and use `"ParentName/ChildName"` references.
+

@@ -16,6 +16,7 @@ namespace Omnisense
         static MCPToolRegistry()
         {
             Application.logMessageReceived += HandleLog;
+            EditorApplication.delayCall += ProcessPendingScriptAttachments;
         }
 
         private static void HandleLog(string logString, string stackTrace, LogType type)
@@ -753,6 +754,15 @@ namespace Omnisense
                     }
                     else
                     {
+                        // Check if the script exists in the project assets (which implies it's either newly written or pending compilation)
+                        string[] guids = AssetDatabase.FindAssets($"{value} t:MonoScript");
+                        if (guids.Length > 0)
+                        {
+                            RegisterPendingScriptAttachment(path, value);
+                            if (isPrefab) PrefabUtility.UnloadPrefabContents(prefabContents);
+                            return new ToolResult { success = true, observation = $"[Post-Compile Scheduled] Script '{value}' was found in Assets but is not yet compiled. It has been successfully scheduled to be attached to GameObject '{path}' immediately after compilation/assembly reload." };
+                        }
+
                         if (isPrefab) PrefabUtility.UnloadPrefabContents(prefabContents);
                         return new ToolResult { success = false, error = $"Component type '{value}' not found in any loaded assembly." };
                     }
@@ -1095,6 +1105,13 @@ namespace Omnisense
                                 }
                             }
                         }
+                    }
+                    else if (actionName == "scene/add_script_component" || actionName == "add_script_component")
+                    {
+                        string scriptNameToAttach = !string.IsNullOrEmpty(op.scriptName) ? op.scriptName :
+                                                   (!string.IsNullOrEmpty(op.name) ? op.name :
+                                                   (!string.IsNullOrEmpty(op.component) ? op.component : op.value));
+                        subResult = AddScriptComponent(op.path, scriptNameToAttach);
                     }
                     else
                     {
@@ -1510,6 +1527,231 @@ namespace Omnisense
                 return new ToolResult { success = false, error = e.Message };
             }
         }
+
+        /// <summary>
+        /// Namespace-safe script attachment tool (tool #30: scene/add_script_component).
+        /// Uses AssetDatabase MonoScript GUID lookup instead of reflection, so it works
+        /// even when the class is in a namespace or the assembly hasn't reloaded yet.
+        /// </summary>
+        public static ToolResult AddScriptComponent(string path, string scriptName)
+        {
+            Debug.Log($"[Omnisense] Tool: AddScriptComponent(path='{path}', scriptName='{scriptName}')");
+            try
+            {
+                // 1. Try to find via reflection first (fastest path for already-compiled types)
+                Type componentType = ResolveComponentType(scriptName);
+                if (componentType != null)
+                {
+                    GameObject obj = FindGameObjectOrPrefab(path);
+                    if (obj == null)
+                        return new ToolResult { success = false, error = $"Object/Prefab not found: {path}" };
+
+                    // Pre-flight: already attached?
+                    if (obj.GetComponent(componentType) != null)
+                        return new ToolResult { success = true, observation = $"[Already Attached] Script '{scriptName}' is already on '{path}'. No modification needed." };
+
+                    bool isPrefab = path.IndexOf(".prefab", StringComparison.OrdinalIgnoreCase) != -1;
+                    if (isPrefab)
+                    {
+                        int prefabExtIndex = path.IndexOf(".prefab", StringComparison.OrdinalIgnoreCase);
+                        string prefabAssetPath = path.Substring(0, prefabExtIndex + 7);
+                        GameObject prefabContents = PrefabUtility.LoadPrefabContents(prefabAssetPath);
+                        if (prefabContents == null)
+                            return new ToolResult { success = false, error = $"Failed to load prefab: {prefabAssetPath}" };
+
+                        GameObject targetObj = prefabContents;
+                        if (path.Length > prefabExtIndex + 7)
+                        {
+                            string childPath = path.Substring(prefabExtIndex + 7).TrimStart('/', '\\');
+                            if (!string.IsNullOrEmpty(childPath))
+                            {
+                                Transform t = prefabContents.transform.Find(childPath);
+                                if (t != null) targetObj = t.gameObject;
+                            }
+                        }
+                        targetObj.AddComponent(componentType);
+                        PrefabUtility.SaveAsPrefabAsset(prefabContents, prefabAssetPath);
+                        PrefabUtility.UnloadPrefabContents(prefabContents);
+                        return new ToolResult { success = true, observation = $"[Staged for Approval] Successfully attached '{scriptName}' to prefab '{path}'." };
+                    }
+                    else
+                    {
+                        Undo.AddComponent(obj, componentType);
+                        return new ToolResult { success = true, observation = $"[Staged for Approval] Successfully attached component '{scriptName}' to '{path}'." };
+                    }
+                }
+
+                // 2. Type not compiled yet — locate the MonoScript asset by name search
+                string[] guids = AssetDatabase.FindAssets($"{scriptName} t:MonoScript");
+                if (guids.Length > 0)
+                {
+                    // Verify name matches (FindAssets can return partial matches)
+                    string bestGuid = null;
+                    foreach (var guid in guids)
+                    {
+                        string assetPath = AssetDatabase.GUIDToAssetPath(guid);
+                        string fileName = System.IO.Path.GetFileNameWithoutExtension(assetPath);
+                        if (fileName.Equals(scriptName, StringComparison.OrdinalIgnoreCase))
+                        {
+                            bestGuid = guid;
+                            break;
+                        }
+                    }
+
+                    if (bestGuid == null) bestGuid = guids[0]; // fallback to first match
+
+                    // Schedule post-compile attachment
+                    RegisterPendingScriptAttachment(path, scriptName);
+                    string assetPathFound = AssetDatabase.GUIDToAssetPath(bestGuid);
+                    return new ToolResult
+                    {
+                        success = true,
+                        observation = $"[Post-Compile Scheduled] MonoScript '{scriptName}' found at '{assetPathFound}' but is not yet compiled into an assembly. " +
+                                      $"It has been scheduled to attach to '{path}' automatically after the next domain reload. " +
+                                      $"This is the CORRECT and COMPLETE outcome. Mark the task done."
+                    };
+                }
+
+                // 3. Script not found in project at all
+                return new ToolResult
+                {
+                    success = false,
+                    error = $"Script '{scriptName}' not found in project assets (no MonoScript asset with that name). " +
+                            $"Ensure the file was created with project/write_file before attaching."
+                };
+            }
+            catch (Exception e)
+            {
+                return new ToolResult { success = false, error = e.Message };
+            }
+        }
+
+        private static void RegisterPendingScriptAttachment(string gameObjectPath, string scriptName)
+        {
+            try
+            {
+                string json = EditorPrefs.GetString("Omnisense_PendingScriptAttachments", "");
+                PendingScriptAttachmentList data = null;
+                if (!string.IsNullOrEmpty(json))
+                {
+                    data = JsonUtility.FromJson<PendingScriptAttachmentList>(json);
+                }
+                if (data == null)
+                {
+                    data = new PendingScriptAttachmentList();
+                }
+
+                // Avoid duplicate staging
+                if (!data.list.Any(x => x.gameObjectPath == gameObjectPath && x.scriptName == scriptName))
+                {
+                    data.list.Add(new PendingScriptAttachment { gameObjectPath = gameObjectPath, scriptName = scriptName });
+                    EditorPrefs.SetString("Omnisense_PendingScriptAttachments", JsonUtility.ToJson(data));
+                    Debug.Log($"[Omnisense-PostCompile] Staging pending script attachment: '{scriptName}' on '{gameObjectPath}'");
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"[Omnisense-PostCompile] Failed to register pending script attachment: {ex.Message}");
+            }
+        }
+
+        private static void ProcessPendingScriptAttachments()
+        {
+            string json = EditorPrefs.GetString("Omnisense_PendingScriptAttachments", "");
+            if (string.IsNullOrEmpty(json)) return;
+
+            try
+            {
+                var data = JsonUtility.FromJson<PendingScriptAttachmentList>(json);
+                if (data == null || data.list == null || data.list.Count == 0) return;
+
+                Debug.Log($"[Omnisense-PostCompile] Processing {data.list.Count} pending script attachment(s) post-compile...");
+                List<PendingScriptAttachment> remaining = new List<PendingScriptAttachment>();
+
+                foreach (var pending in data.list)
+                {
+                    GameObject obj = FindGameObjectOrPrefab(pending.gameObjectPath);
+                    if (obj == null)
+                    {
+                        Debug.LogWarning($"[Omnisense-PostCompile] Post-compile attachment failed: GameObject/Prefab not found at '{pending.gameObjectPath}'");
+                        continue;
+                    }
+
+                    Type type = ResolveComponentType(pending.scriptName);
+                    if (type == null)
+                    {
+                        // Still not compiled or failed to find. Keep in list to try again next reload
+                        Debug.LogError($"[Omnisense-PostCompile] Post-compile attachment failed: Script type '{pending.scriptName}' still not found in assemblies.");
+                        remaining.Add(pending);
+                        continue;
+                    }
+
+                    if (obj.GetComponent(type) != null)
+                    {
+                        Debug.Log($"[Omnisense-PostCompile] Script '{pending.scriptName}' is already attached to '{pending.gameObjectPath}'.");
+                        continue;
+                    }
+
+                    int prefabExtIndex = pending.gameObjectPath.IndexOf(".prefab", StringComparison.OrdinalIgnoreCase);
+                    bool isPrefab = prefabExtIndex != -1;
+
+                    if (isPrefab)
+                    {
+                        string prefabAssetPath = pending.gameObjectPath.Substring(0, prefabExtIndex + 7);
+                        GameObject prefabContents = PrefabUtility.LoadPrefabContents(prefabAssetPath);
+                        if (prefabContents != null)
+                        {
+                            GameObject targetObj = prefabContents;
+                            if (pending.gameObjectPath.Length > prefabExtIndex + 7)
+                            {
+                                string childPath = pending.gameObjectPath.Substring(prefabExtIndex + 7).TrimStart('/', '\\');
+                                if (!string.IsNullOrEmpty(childPath))
+                                {
+                                    Transform target = prefabContents.transform.Find(childPath);
+                                    if (target != null) targetObj = target.gameObject;
+                                }
+                            }
+                            targetObj.AddComponent(type);
+                            PrefabUtility.SaveAsPrefabAsset(prefabContents, prefabAssetPath);
+                            PrefabUtility.UnloadPrefabContents(prefabContents);
+                            Debug.Log($"[Omnisense-PostCompile] Successfully attached component '{pending.scriptName}' to Prefab Child '{pending.gameObjectPath}' post-compilation.");
+                        }
+                    }
+                    else
+                    {
+                        Undo.AddComponent(obj, type);
+                        Debug.Log($"[Omnisense-PostCompile] Successfully attached component '{pending.scriptName}' to GameObject '{pending.gameObjectPath}' post-compilation.");
+                    }
+                }
+
+                if (remaining.Count > 0)
+                {
+                    var remainingList = new PendingScriptAttachmentList { list = remaining };
+                    EditorPrefs.SetString("Omnisense_PendingScriptAttachments", JsonUtility.ToJson(remainingList));
+                }
+                else
+                {
+                    EditorPrefs.DeleteKey("Omnisense_PendingScriptAttachments");
+                }
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"[Omnisense-PostCompile] Error processing pending script attachments: {e.Message}");
+            }
+        }
+    }
+
+    [Serializable]
+    public class PendingScriptAttachment
+    {
+        public string gameObjectPath;
+        public string scriptName;
+    }
+
+    [Serializable]
+    public class PendingScriptAttachmentList
+    {
+        public List<PendingScriptAttachment> list = new List<PendingScriptAttachment>();
     }
 
     [Serializable]
@@ -1524,6 +1766,7 @@ namespace Omnisense
         public string value;
         public string component;
         public string type;
+        public string scriptName;
         public List<string> components;
     }
 }

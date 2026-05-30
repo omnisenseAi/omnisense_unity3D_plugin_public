@@ -41,6 +41,9 @@ namespace Omnisense
         public float spacing;
         public string paddingCSV;
         public string childAlignment;
+
+        // scene/add_script_component field
+        public string scriptName;
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -59,6 +62,8 @@ namespace Omnisense
 
             switch (toolCall.method)
             {
+                case "scene/add_script_component":
+                    return MCPToolRegistry.AddScriptComponent(p.path, p.scriptName ?? p.name ?? p.component ?? p.value);
                 case "project/write_file":
                     return MCPToolRegistry.WriteFile(p.path, p.content);
                 case "project/edit_file":
@@ -140,7 +145,7 @@ namespace Omnisense
         /// </summary>
         public static bool IsCompilationTrigger(string method)
         {
-            return method == "project/write_file" || method == "project/edit_file";
+            return method == "project/write_file" || method == "project/edit_file" || method == "scene/add_script_component";
         }
 
         /// <summary>
@@ -214,6 +219,7 @@ namespace Omnisense
                 case "scene/set_component_property":
                 case "scene/execute_transactions":
                 case "scene/capture_ui_screenshot":
+                case "scene/add_script_component":
                 case "ui/setup_canvas":
                 case "ui/create_panel":
                 case "ui/create_text":
@@ -285,6 +291,8 @@ namespace Omnisense
                     }
                     return $"<color=#FFFF00>~ Execute Transactions (Batched {p.operations.Count} operations):</color>\n{string.Join("\n", list)}";
                 }
+                case "scene/add_script_component":
+                    return $"<color=#00FF00>+ Attach Script:</color> '{p.scriptName ?? p.name ?? p.component ?? p.value}' on '{p.path}'";
                 default:
                     return "Pending changes...";
             }
@@ -315,6 +323,7 @@ namespace Omnisense
                 case "scene/inspect_component": return $"Inspected component '{p.component}' on: '{p.path}'";
                 case "scene/set_component_property": return $"Set '{p.component}.{p.property}' = '{p.value}' on: '{p.path}'";
                 case "scene/execute_transactions": return $"Executed batched transactions: {p.operations?.Count ?? 0} operations";
+                case "scene/add_script_component": return $"Attached script '{p.name ?? p.component}' to '{p.path}'";
                 case "project/create_prefab": return $"Created prefab: '{p.destinationAssetPath}' from '{p.path}'";
                 case "project/inspect_asset": return $"Inspected asset: '{p.path}'";
                 default: return null;
