@@ -129,11 +129,80 @@ namespace Omnisense
         }
 
         /// <summary>
-        /// Returns true if the given tool method is considered a destructive (write) operation
-        /// that should trigger user approval.
+        /// Returns true if the given tool method is considered a destructive (write) operation.
+        /// Kept for backwards compatibility — prefer GetApprovalMode() for new code.
         /// </summary>
-        public static bool IsDestructiveTool(string method)
+        public static bool IsDestructiveTool(string method) =>
+            GetApprovalMode(method) != ApprovalMode.AutoApprove;
+
+        /// <summary>
+        /// Returns true if this tool causes Unity script compilation (and we should wait).
+        /// </summary>
+        public static bool IsCompilationTrigger(string method)
         {
+            return method == "project/write_file" || method == "project/edit_file";
+        }
+
+        /// <summary>
+        /// Classify a tool call into one of three approval modes:
+        ///
+        ///   AutoApprove — read-only / safe; execute immediately, no UI prompt.
+        ///   Deferred    — standard write; stage in PendingActionQueue, agent continues,
+        ///                 user reviews the full batch at the end of the turn.
+        ///   Blocking    — dangerous operation (shell, out-of-CWD path);
+        ///                 agent must PAUSE and wait for explicit user consent.
+        ///
+        /// The path parameter (optional) lets us escalate file writes that target
+        /// locations outside the Assets folder to Blocking.
+        /// </summary>
+        public static ApprovalMode GetApprovalMode(string method, string path = null)
+        {
+            // ── Read-only tools — always safe ──
+            switch (method)
+            {
+                case "project/list_directory":
+                case "project/read_file":
+                case "project/inspect_asset":
+                case "project/search_assets":
+                case "project/inspect_player_settings":
+                case "project/list_packages":
+                case "project/list_tags_and_layers":
+                case "project/inspect_build_settings":
+                case "project/get_asset_guid":
+                case "scene/inspect_node":
+                case "scene/inspect_component":
+                case "editor/read_console":
+                case "project/update_dna":   // DNA updates are internal bookkeeping
+                    return ApprovalMode.AutoApprove;
+            }
+
+            // ── File writes outside Assets/ are DANGEROUS ──
+            bool isOutOfBounds = false;
+            if (!string.IsNullOrEmpty(path))
+            {
+                // Normalise separators
+                string normPath = path.Replace('\\', '/');
+                // Paths that start with Assets/ or are relative filenames are in-bounds
+                bool startsWithAssets = normPath.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase)
+                                     || normPath.StartsWith("assets/", StringComparison.OrdinalIgnoreCase);
+                bool isAbsolute = System.IO.Path.IsPathRooted(path);
+                isOutOfBounds = isAbsolute || !startsWithAssets;
+            }
+
+            if (isOutOfBounds &&
+                (method == "project/write_file" || method == "project/edit_file"))
+            {
+                return ApprovalMode.Blocking;
+            }
+
+            // ── Shell / arbitrary execution — always Blocking ──
+            if (method.StartsWith("shell/") || method.StartsWith("system/") ||
+                method == "editor/execute_menu_item")
+            {
+                return ApprovalMode.Blocking;
+            }
+
+            // ── All remaining write operations — Deferred (batch approval) ──
             switch (method)
             {
                 case "project/write_file":
@@ -144,23 +213,18 @@ namespace Omnisense
                 case "scene/modify_node":
                 case "scene/set_component_property":
                 case "scene/execute_transactions":
+                case "scene/capture_ui_screenshot":
                 case "ui/setup_canvas":
                 case "ui/create_panel":
                 case "ui/create_text":
                 case "ui/create_button":
                 case "ui/setup_layout_group":
-                    return true;
-                default:
-                    return false;
-            }
-        }
+                    return ApprovalMode.Deferred;
 
-        /// <summary>
-        /// Returns true if this tool causes Unity script compilation (and we should wait).
-        /// </summary>
-        public static bool IsCompilationTrigger(string method)
-        {
-            return method == "project/write_file" || method == "project/edit_file";
+                default:
+                    // Unknown tools default to Deferred (safe side)
+                    return ApprovalMode.Deferred;
+            }
         }
 
         /// <summary>

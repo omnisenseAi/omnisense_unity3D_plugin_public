@@ -360,3 +360,22 @@ The agent's "hands" have been specifically tuned for the Unity Editor environmen
 - **Anti-Speculation Mandate**: Hardened all specialist worker prompts (`CODING_SPECIALIST_PROMPT`, `UI_SPECIALIST_PROMPT`, `GENERIC_WORKER_PROMPT`) to ban speculative, passive, or conversational phrasing (e.g. *"Not yet guaranteed"*, *"If you want I can"*, *"Maybe this will work"*). Workers are directed to be absolutely decisive, immediately execute tool actions, run validation checks (console and scene tree), and output clean success summaries.
 - **Pragmatic Manager Verification**: Overhauled the `MANAGER_SYSTEM_PROMPT` success criteria to prioritize confirmed tool outcomes (such as successful write/edit operations) and compile logs over pedantic natural language phrasing. The manager will no longer reject successful code edits just because the worker used careful text.
 - **Advanced Diagnostics & Tracing**: Injected additional diagnostic `Debug.Log` statements throughout the context builder and request dispatch pipeline to track history sizes, active execution steps, and token boosting for seamless debugging.
+
+---
+
+## 45. Optimistic Execution with Deferred Approval (Phase 44)
+- **High-Velocity Non-Blocking Agent Workflow**: Completely overhauled the trust/approval system. Instead of blocking the agent on every single file-write or scene-manipulation tool call, the agent now executes *optimistically* in memory and stages changes. It records all actions needing approval in a dedicated queue, letting the agent continue working uninterrupted until the end of its turn.
+- **Dedicated Staging Queue Architecture**: Created `PendingActionQueue.cs` which manages the staging lifecycle of agent actions. It defines an `ApprovalMode` (AutoApprove, Deferred, Blocking) and stages write, delete, shell, and scene manipulation tasks under a standard `StagedAction` format.
+- **Three-Tier Tool Classification System**: Added a smart classifier `ToolDispatcher.GetApprovalMode()` that dynamically groups incoming agent tool requests into three distinct safety levels:
+  1. **AutoApprove**: Safe, non-destructive tools (e.g., reads, inspects, searches, console checks) execute instantly without user interaction.
+  2. **Deferred**: Standard modifications (e.g., write/edit files in the workspace, scene instantiation, component modification) run optimistically. The changes are recorded in the `PendingActionQueue` and compiled, but wait for user approval at the end of the turn to commit.
+  3. **Blocking**: Dangerous or out-of-workspace operations (e.g., running shell commands, editing files outside CWD) immediately freeze execution and prompt the user for real-time confirmation.
+- **Premium Batch Review Panel**: Overhauled the `OmnisenseWindow` UI with a modern, batch-approval system. At the end of a turn, instead of seeing multiple separate modal pops, the user is presented with a consolidated review panel containing:
+  - Collapsible cards for each staged modification with detailed descriptions.
+  - Sub-task visual groupings.
+  - Toggle checkboxes to approve or reject individual changes.
+  - A "Select All" and "Deselect All" button group.
+  - A persistent commit bar containing **"✓ Apply N Change(s)"** and **"✗ Reject All"** buttons.
+- **Perfect Rollback and Commit Execution**: If the user approves a subset or all changes, the orchestrator commits them to disk and updates the transaction logs. If any changes are rejected, the system uses the file-based backup engine to seamlessly undo only the rejected files, leaving the workspace in a clean, consistent state.
+- **Domain Reload Recompilation Harmony**: Integrates directly with the `AssemblyLock` compiler safety features. The agent is able to stage multiple C# file writes sequentially while assemblies are locked, and flush them in a single batch, completely avoiding the infinite Domain Reload compile cycles and death spirals.
+

@@ -56,8 +56,21 @@ namespace Omnisense
         // ── Isolated Context Manager (W4 fix) ──
         private AgentContextManager _context = new AgentContextManager();
 
+        // ── Deferred Approval Queue ──
+        // Implements Optimistic Execution: the agent stages writes into the queue and
+        // continues working autonomously. The user reviews (and optionally rejects)
+        // the full batch at the end of the turn.
+        private readonly PendingActionQueue _approvalQueue = new PendingActionQueue();
+
         // ── Events ──
+        /// <summary>
+        /// Legacy event kept for backwards compatibility. New code should subscribe to
+        /// PendingActionQueue.OnBlockingApprovalRequired and OnQueueReadyForReview.
+        /// </summary>
         public event Action<string, Action<bool>> OnPendingAction;
+
+        /// <summary>Exposes the queue so OmnisenseWindow can wire up UI callbacks.</summary>
+        public PendingActionQueue ApprovalQueue => _approvalQueue;
 
         // ── Serialization DTOs ──
         [Serializable] public class PlannerResponse { public string intent; public bool requires_tools; public List<string> tasks; }
@@ -162,6 +175,7 @@ namespace Omnisense
             _consecutiveManagerRejections = 0;
             _lastManagerFeedback = "";
             _context.Clear();
+            _approvalQueue.Clear();
             SaveState();
             Debug.Log("[Omnisense] AI History cleared.");
         }
@@ -198,6 +212,7 @@ namespace Omnisense
             _consecutiveManagerRejections = 0;
             _routingDecision = "planner";
             _scriptEditOccurred = false;
+            _approvalQueue.Clear();
             OmnisenseUndoManager.StartTurn(turnId);
 
             // ── Domain Reload Lock ──
@@ -220,14 +235,30 @@ namespace Omnisense
         }
 
         /// <summary>
-        /// Centralised turn-end helper.  Always call this instead of invoking onComplete
-        /// with isDone=true directly, so that assembly unlock + AssetDatabase refresh
-        /// happen exactly once per turn.
+        /// Centralised turn-end helper. Presents the deferred approval queue for
+        /// batch review, flushes approved actions, then unlocks assemblies.
+        /// Always call this instead of calling onComplete with isDone=true directly.
         /// </summary>
         private void FinishTurn(string message, string trace, Action<string, string, bool> onComplete)
         {
-            UnlockAssemblies();
-            onComplete?.Invoke(message, trace, true);
+            // Present staged actions for batch review before unlocking assemblies.
+            // The lambda is called back by the UI after the user approves/rejects.
+            _approvalQueue.PresentQueueForReview((approvedIds) =>
+            {
+                // Flush approved actions to disk
+                var results = _approvalQueue.FlushApproved(approvedIds);
+
+                // Track if any script files were written during the flush
+                foreach (var (action, result) in results)
+                {
+                    if (result.success && ToolDispatcher.IsCompilationTrigger(action.ToolCall.method))
+                        _scriptEditOccurred = true;
+                }
+
+                // Now safe to unlock and trigger a single AssetDatabase.Refresh()
+                UnlockAssemblies();
+                onComplete?.Invoke(message, trace, true);
+            });
         }
 
         private void UnlockAssemblies()
@@ -263,6 +294,8 @@ namespace Omnisense
                 _activeRequest.Abort();
                 _activeRequest = null;
             }
+            // Discard any staged actions and unlock
+            _approvalQueue.Clear();
             // Make sure we don't leave assemblies permanently locked
             UnlockAssemblies();
         }
@@ -684,34 +717,11 @@ namespace Omnisense
             string thought = ExtractThought(response);
             if (!string.IsNullOrEmpty(thought))
                 uiResponse = $"<thought>{thought}</thought>\n\n[System]: Actioning your request...";
-            onComplete?.Invoke(uiResponse, _currentTurnTrace.ToString(), false);
 
+            MCPToolRequest toolCall;
             try
             {
-                var toolCall = JsonUtility.FromJson<MCPToolRequest>(toolJson);
-
-                if (ToolDispatcher.IsDestructiveTool(toolCall.method) && OnPendingAction != null)
-                {
-                    string diffSummary = ToolDispatcher.GenerateDiffSummary(toolCall, toolJson);
-                    OnPendingAction.Invoke(diffSummary, (approved) =>
-                    {
-                        if (approved)
-                            ExecuteToolAndResume(toolCall, toolJson, uiResponse, model, onComplete);
-                        else
-                        {
-                            Debug.Log("[Omnisense] User rejected pending action.");
-                            _context.AddWorkerMessage("user", "[Observation]\nThe user rejected this change. Please revise your plan or ask for clarification.");
-                            _context.Save();
-                            _currentTurnTrace.AppendLine("[Observation]\nUser rejected this change.");
-                            ExecuteRequest(model, onComplete);
-                        }
-                    });
-                    return;
-                }
-                else
-                {
-                    ExecuteToolAndResume(toolCall, toolJson, uiResponse, model, onComplete);
-                }
+                toolCall = JsonUtility.FromJson<MCPToolRequest>(toolJson);
             }
             catch (Exception e)
             {
@@ -720,6 +730,69 @@ namespace Omnisense
                 _context.Save();
                 _currentTurnTrace.AppendLine($"[System Error]: Failed to parse tool request: {e.Message}");
                 ExecuteRequest(model, onComplete);
+                return;
+            }
+
+            // Determine approval mode based on tool type and path
+            string toolPath = toolCall.@params?.path;
+            var approvalMode = ToolDispatcher.GetApprovalMode(toolCall.method, toolPath);
+            string diffSummary = ToolDispatcher.GenerateDiffSummary(toolCall, toolJson);
+
+            Debug.Log($"[Omnisense-Approval] Tool '{toolCall.method}' → ApprovalMode: {approvalMode}");
+
+            switch (approvalMode)
+            {
+                case ApprovalMode.AutoApprove:
+                    // Safe read-only operation — execute immediately, no UI prompt
+                    onComplete?.Invoke(uiResponse, _currentTurnTrace.ToString(), false);
+                    ExecuteToolAndResume(toolCall, toolJson, uiResponse, model, onComplete);
+                    break;
+
+                case ApprovalMode.Deferred:
+                    // Stage in queue, give agent an optimistic observation, continue
+                    string actionId = _approvalQueue.Stage(toolCall, toolJson, _currentTask, diffSummary);
+                    string stagedObs = $"[Staged for Approval] Action '{toolCall.method}' has been staged (ID: {actionId[..8]}). " +
+                                       $"The change will be applied when the user reviews and approves the batch at the end of this turn.\n" +
+                                       $"Summary: {diffSummary}";
+
+                    // Track compilation triggers so we know to refresh after flush
+                    if (ToolDispatcher.IsCompilationTrigger(toolCall.method))
+                        _scriptEditOccurred = true;
+
+                    string logEntry = ToolDispatcher.BuildContextLogEntry(toolCall.method, toolCall.@params ?? new MCPToolParams());
+                    if (logEntry != null)
+                    {
+                        _turnContextLog.Add(logEntry);
+                        _context.AddScratchpadEntry(logEntry);
+                    }
+
+                    _context.AddWorkerMessage("user", $"[Observation]\n{stagedObs}");
+                    _context.Save();
+                    _currentTurnTrace.AppendLine($"[Staged → Queue] {diffSummary}\n");
+                    onComplete?.Invoke($"⏳ Staged: {diffSummary}", _currentTurnTrace.ToString(), false);
+                    ExecuteRequest(model, onComplete);
+                    break;
+
+                case ApprovalMode.Blocking:
+                    // Dangerous operation — pause agent and wait for explicit consent
+                    Debug.LogWarning($"[Omnisense-Approval] BLOCKING approval required for: {toolCall.method} on '{toolPath}'");
+                    onComplete?.Invoke($"⚠️ Dangerous operation requires your approval before proceeding.\n{diffSummary}", _currentTurnTrace.ToString(), false);
+                    _approvalQueue.RequestBlockingApproval(toolCall, toolJson, _currentTask, diffSummary, (approved) =>
+                    {
+                        if (approved)
+                        {
+                            ExecuteToolAndResume(toolCall, toolJson, uiResponse, model, onComplete);
+                        }
+                        else
+                        {
+                            Debug.Log("[Omnisense] User rejected dangerous blocking action.");
+                            _context.AddWorkerMessage("user", "[Observation]\nThe user rejected this dangerous operation. Please revise your plan or ask for clarification.");
+                            _context.Save();
+                            _currentTurnTrace.AppendLine("[Observation]\nUser rejected dangerous operation.");
+                            ExecuteRequest(model, onComplete);
+                        }
+                    });
+                    break;
             }
         }
 

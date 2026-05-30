@@ -176,7 +176,11 @@ namespace Omnisense
                 }
             });
 
-            AIOrchestrator.Instance.OnPendingAction += HandlePendingAction;
+            AIOrchestrator.Instance.OnPendingAction += HandleBlockingApproval_Legacy;
+
+            // ── Deferred Batch Approval queue hooks ──
+            AIOrchestrator.Instance.ApprovalQueue.OnBlockingApprovalRequired += HandleBlockingApproval;
+            AIOrchestrator.Instance.ApprovalQueue.OnQueueReadyForReview     += ShowApprovalPanel;
 
             root.RegisterCallback<KeyDownEvent>(evt => {
                 if (evt.actionKey && evt.keyCode == KeyCode.V)
@@ -577,44 +581,80 @@ namespace Omnisense
             });
         }
 
-        private void HandlePendingAction(string diffSummary, Action<bool> callback)
+        // ════════════════════════════════════════════════════════════
+        //  APPROVAL PANEL — Deferred Batch Approval UI
+        // ════════════════════════════════════════════════════════════
+
+        /// <summary>
+        /// Legacy shim — keeps backwards compatibility with old OnPendingAction event.
+        /// </summary>
+        private void HandleBlockingApproval_Legacy(string diffSummary, Action<bool> callback)
+        {
+            var fakeAction = new StagedAction
+            {
+                Id          = System.Guid.NewGuid().ToString(),
+                SubTask     = "Legacy Action",
+                DiffSummary = diffSummary,
+            };
+            HandleBlockingApproval(fakeAction, callback);
+        }
+
+        /// <summary>
+        /// Renders a compact, high-priority blocking modal inline in the chat.
+        /// The agent is PAUSED until the user clicks Accept or Reject.
+        /// </summary>
+        private void HandleBlockingApproval(StagedAction action, Action<bool> callback)
         {
             var container = new VisualElement();
             container.AddToClassList("chat-message");
             container.AddToClassList("ai-message");
-            container.style.backgroundColor = new Color(0.15f, 0.15f, 0.15f);
-            container.style.borderLeftColor = new Color(1f, 0.8f, 0.2f);
-            container.style.borderLeftWidth = 4;
+            container.style.backgroundColor = new Color(0.25f, 0.10f, 0.05f);
+            container.style.borderLeftColor  = new Color(1f, 0.3f, 0.1f);
+            container.style.borderLeftWidth  = 4;
+            container.style.marginBottom     = 6;
 
-            var header = new Label("⚠️ Pending Action Approval");
+            var header = new Label("🚨 Dangerous Operation — Approval Required");
             header.style.unityFontStyleAndWeight = FontStyle.Bold;
-            header.style.color = new Color(1f, 0.8f, 0.2f);
+            header.style.color = new Color(1f, 0.4f, 0.1f);
             container.Add(header);
 
-            var diffText = new Label(diffSummary);
-            diffText.enableRichText = true;
+            var subTaskLabel = new Label($"Task: {action.SubTask}");
+            subTaskLabel.style.color     = new Color(0.7f, 0.7f, 0.7f);
+            subTaskLabel.style.marginTop = 3;
+            container.Add(subTaskLabel);
+
+            var diffText = new Label(action.DiffSummary);
+            diffText.enableRichText  = true;
             diffText.style.marginTop = 5;
             diffText.style.marginBottom = 10;
-            diffText.style.whiteSpace = WhiteSpace.Normal;
+            diffText.style.whiteSpace   = WhiteSpace.Normal;
             container.Add(diffText);
+
+            var warning = new Label("⚠️ This operation targets a location outside the Assets folder or executes a shell command. "
+                                  + "The agent will WAIT until you decide.");
+            warning.style.color      = new Color(1f, 0.75f, 0.3f);
+            warning.style.whiteSpace = WhiteSpace.Normal;
+            warning.style.fontSize   = 10;
+            container.Add(warning);
 
             var buttonRow = new VisualElement();
             buttonRow.style.flexDirection = FlexDirection.Row;
+            buttonRow.style.marginTop     = 8;
 
             var btnAccept = new Button(() => {
                 container.RemoveFromHierarchy();
                 callback(true);
-            }) { text = "✓ Accept" };
-            btnAccept.style.backgroundColor = new Color(0.2f, 0.5f, 0.2f);
-            btnAccept.style.color = Color.white;
+            }) { text = "✓ Allow" };
+            btnAccept.style.backgroundColor = new Color(0.15f, 0.45f, 0.15f);
+            btnAccept.style.color  = Color.white;
             btnAccept.style.flexGrow = 1;
 
             var btnReject = new Button(() => {
                 container.RemoveFromHierarchy();
                 callback(false);
-            }) { text = "✗ Reject" };
-            btnReject.style.backgroundColor = new Color(0.6f, 0.2f, 0.2f);
-            btnReject.style.color = Color.white;
+            }) { text = "✗ Deny" };
+            btnReject.style.backgroundColor = new Color(0.55f, 0.15f, 0.15f);
+            btnReject.style.color  = Color.white;
             btnReject.style.flexGrow = 1;
 
             buttonRow.Add(btnAccept);
@@ -623,6 +663,178 @@ namespace Omnisense
 
             _chatHistory.Add(container);
             SafeScrollTo(container);
+        }
+
+        /// <summary>
+        /// Renders the end-of-turn batch approval panel.
+        /// Groups staged actions by their sub-task, shows per-item checkboxes,
+        /// and provides "Approve All" / "Reject All" bulk actions.
+        /// </summary>
+        private void ShowApprovalPanel(IReadOnlyList<StagedAction> actions, Action<IEnumerable<string>> commitCallback)
+        {
+            if (actions == null || actions.Count == 0)
+            {
+                commitCallback?.Invoke(Array.Empty<string>());
+                return;
+            }
+
+            // ── Outer panel ──
+            var panel = new VisualElement();
+            panel.name = "approval-panel";
+            panel.style.backgroundColor  = new Color(0.10f, 0.12f, 0.16f);
+            panel.style.borderTopColor   = new Color(0.2f, 0.6f, 1f);
+            panel.style.borderTopWidth   = 3;
+            panel.style.borderBottomColor = new Color(0.2f, 0.6f, 1f);
+            panel.style.borderBottomWidth = 1;
+            panel.style.borderLeftColor  = new Color(0.2f, 0.6f, 1f);
+            panel.style.borderLeftWidth  = 1;
+            panel.style.borderRightColor = new Color(0.2f, 0.6f, 1f);
+            panel.style.borderRightWidth = 1;
+            panel.style.marginTop        = 8;
+            panel.style.marginBottom     = 8;
+            panel.style.paddingTop       = 10;
+            panel.style.paddingBottom    = 10;
+            panel.style.paddingLeft      = 12;
+            panel.style.paddingRight     = 12;
+
+            // Header
+            var headerRow = new VisualElement();
+            headerRow.style.flexDirection   = FlexDirection.Row;
+            headerRow.style.justifyContent  = Justify.SpaceBetween;
+            headerRow.style.alignItems      = Align.Center;
+            headerRow.style.marginBottom    = 8;
+
+            var headerLabel = new Label($"📋 Review {actions.Count} Staged Action(s)");
+            headerLabel.style.unityFontStyleAndWeight = FontStyle.Bold;
+            headerLabel.style.fontSize = 13;
+            headerLabel.style.color    = new Color(0.6f, 0.85f, 1f);
+            headerRow.Add(headerLabel);
+
+            var subheader = new Label("The agent has finished. Review the changes below before they are written to disk.");
+            subheader.style.color      = new Color(0.65f, 0.65f, 0.65f);
+            subheader.style.whiteSpace = WhiteSpace.Normal;
+            subheader.style.fontSize   = 10;
+            subheader.style.marginBottom = 8;
+
+            panel.Add(headerRow);
+            panel.Add(subheader);
+
+            // ── Per-action cards with checkboxes ──
+            var checkboxMap = new Dictionary<string, Toggle>();  // actionId → toggle
+            string lastTask = null;
+
+            foreach (var action in actions)
+            {
+                // Sub-task group header
+                if (action.SubTask != lastTask)
+                {
+                    lastTask = action.SubTask;
+                    var taskHeader = new Label($"📌 {action.SubTask}");
+                    taskHeader.style.color     = new Color(0.9f, 0.75f, 0.3f);
+                    taskHeader.style.unityFontStyleAndWeight = FontStyle.Bold;
+                    taskHeader.style.marginTop    = 10;
+                    taskHeader.style.marginBottom = 4;
+                    panel.Add(taskHeader);
+                }
+
+                // Action card
+                var card = new VisualElement();
+                card.style.flexDirection    = FlexDirection.Row;
+                card.style.alignItems       = Align.FlexStart;
+                card.style.backgroundColor  = new Color(0.13f, 0.15f, 0.20f);
+                card.style.marginBottom     = 4;
+                card.style.paddingTop       = 6;
+                card.style.paddingBottom    = 6;
+                card.style.paddingLeft      = 8;
+                card.style.paddingRight     = 8;
+
+                var toggle = new Toggle { value = true };  // default: approved
+                toggle.style.marginRight = 8;
+                toggle.style.marginTop   = 2;
+                checkboxMap[action.Id]   = toggle;
+                card.Add(toggle);
+
+                var cardText = new VisualElement();
+                cardText.style.flexShrink = 1;
+
+                var diffLabel = new Label(action.DiffSummary);
+                diffLabel.enableRichText  = true;
+                diffLabel.style.whiteSpace = WhiteSpace.Normal;
+                diffLabel.style.fontSize   = 11;
+                cardText.Add(diffLabel);
+
+                var metaLabel = new Label($"🕐 {action.Timestamp}  |  {action.ToolCall?.method}");
+                metaLabel.style.color    = new Color(0.5f, 0.5f, 0.5f);
+                metaLabel.style.fontSize = 9;
+                metaLabel.style.marginTop = 2;
+                cardText.Add(metaLabel);
+
+                card.Add(cardText);
+                panel.Add(card);
+            }
+
+            // ── Bulk action bar ──
+            var bulkRow = new VisualElement();
+            bulkRow.style.flexDirection  = FlexDirection.Row;
+            bulkRow.style.marginTop      = 12;
+            bulkRow.style.marginBottom   = 4;
+
+            var btnSelectAll = new Button(() => {
+                foreach (var t in checkboxMap.Values) t.value = true;
+            }) { text = "☑ Select All" };
+            btnSelectAll.style.backgroundColor = new Color(0.2f, 0.25f, 0.35f);
+            btnSelectAll.style.color  = Color.white;
+            btnSelectAll.style.flexGrow = 1;
+
+            var btnDeselectAll = new Button(() => {
+                foreach (var t in checkboxMap.Values) t.value = false;
+            }) { text = "☐ Deselect All" };
+            btnDeselectAll.style.backgroundColor = new Color(0.25f, 0.2f, 0.2f);
+            btnDeselectAll.style.color  = Color.white;
+            btnDeselectAll.style.flexGrow = 1;
+
+            bulkRow.Add(btnSelectAll);
+            bulkRow.Add(btnDeselectAll);
+            panel.Add(bulkRow);
+
+            // ── Commit bar ──
+            var commitRow = new VisualElement();
+            commitRow.style.flexDirection = FlexDirection.Row;
+            commitRow.style.marginTop     = 6;
+
+            var btnApproveAll = new Button(() => {
+                panel.RemoveFromHierarchy();
+                var approvedIds = new List<string>();
+                foreach (var kvp in checkboxMap)
+                    if (kvp.Value.value) approvedIds.Add(kvp.Key);
+                int rejected = actions.Count - approvedIds.Count;
+                Debug.Log($"[Omnisense-ApprovalQueue] User approved {approvedIds.Count}, rejected {rejected} staged action(s).");
+                AddMessageToChat("System", $"✅ Approved {approvedIds.Count} action(s). {(rejected > 0 ? $"{rejected} rejected." : "")}");
+                commitCallback?.Invoke(approvedIds);
+            }) { text = $"✓ Apply {actions.Count} Change(s)" };
+            btnApproveAll.style.backgroundColor = new Color(0.15f, 0.48f, 0.20f);
+            btnApproveAll.style.color  = Color.white;
+            btnApproveAll.style.flexGrow = 2;
+            btnApproveAll.style.height   = 32;
+            btnApproveAll.style.unityFontStyleAndWeight = FontStyle.Bold;
+
+            var btnRejectAll = new Button(() => {
+                panel.RemoveFromHierarchy();
+                Debug.Log("[Omnisense-ApprovalQueue] User rejected ALL staged actions.");
+                AddMessageToChat("System", $"❌ All {actions.Count} staged action(s) rejected. No changes written to disk.");
+                commitCallback?.Invoke(Array.Empty<string>());
+            }) { text = "✗ Reject All" };
+            btnRejectAll.style.backgroundColor = new Color(0.5f, 0.15f, 0.15f);
+            btnRejectAll.style.color  = Color.white;
+            btnRejectAll.style.flexGrow = 1;
+            btnRejectAll.style.height   = 32;
+
+            commitRow.Add(btnApproveAll);
+            commitRow.Add(btnRejectAll);
+            panel.Add(commitRow);
+
+            _chatHistory.Add(panel);
+            SafeScrollTo(panel);
         }
 
         private void UpdateSpinner()
