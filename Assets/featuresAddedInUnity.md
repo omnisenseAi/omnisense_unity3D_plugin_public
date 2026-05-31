@@ -415,19 +415,21 @@ Despite the Deferred Approval Queue, the agent kept hitting a 3-part failure loo
 
 ---
 
-## 48. Batched Namespace-Safe Script Attachment & Robust Reference Wiring (Phase 47)
+## 48. Batched Structural, UI, & Scripting Transactions with Robust Reference Wiring (Phase 47)
 
 ### Problem Solved
-Analyzing logs from `UnityTest6.txt` revealed two final layers of script setup failures:
-1. **Silent Fallthrough Bug**: When the AI batched its operations inside a `scene/execute_transactions` block, it included the new `"scene/add_script_component"` action. However, `ExecuteTransactions` did not have a case mapping this action name. It fell through to the unhandled `else` block, returning a failure in the transaction operation array. This caused the script attachment to fail, and subsequent dependent edits (such as wiring fields like `_entryPoint`) also failed because the target component did not exist on the GameObject.
-2. **Bad Reference Wiring**: The AI agent was generating invalid `set_component_property` parameters by assigning plain strings (e.g., GameObject name `"Building"`) directly to `Transform` reference fields (like `_entryPoint`), instead of using the correct, fully-qualified hierarchy path system.
+Analyzing logs from `UnityTest6.txt` and subsequent multi-agent test runs revealed that while the namespace-safe script attachment (`scene/add_script_component`) had been successfully implemented, other structural operations (such as `scene/add_child`, `scene/add_component`, `scene/remove_component`), UI layout commands (`ui/setup_canvas`, `ui/create_panel`, `ui/create_text`, `ui/create_button`, `ui/setup_layout_group`), and project asset tools (`project/create_prefab`, `project/create_tag_or_layer`) were either partially unmapped or completely missing from the batched transaction runner `ExecuteTransactions`. When the AI batched its operations inside a `scene/execute_transactions` block, these missing or namespace-prefixed action definitions fell through to the unhandled `else` case, causing silent failures during deferred approval execution and disrupting parent-child structures and wiring processes.
 
-### Fix A: Transactional Action Integration (MCPToolRegistry.cs)
-- **Batched Script Support**: Added handling for `"scene/add_script_component"` and `"add_script_component"` inside the loop of the `ExecuteTransactions` method. It extracts the script name from `scriptName`, `name`, `component`, or `value` and runs the `AddScriptComponent` logic seamlessly in the batch transaction.
-- **Staging Deserialization**: Added the `scriptName` string field to the `TransactionOperation` data class. This ensures any `scriptName` parameters supplied by the client during batched requests are fully deserialized and passed into the attachment pipeline.
+### Fix A: Universal Transaction Integration (MCPToolRegistry.cs & ToolDispatcher.cs)
+- **Universal Batched Tool Mapping**: Overhauled the internal processing switch-block inside `ExecuteTransactions` to map **every single modification, instantiation, layout, and creation tool** from `ToolDispatcher.cs` into the transaction runner:
+  - **Structural Actions**: Added handling for `"scene/add_child"`, `"scene/add_component"`, and `"scene/remove_component"` actions (including namespace-qualified and exact formats) so that hierarchies and components build flawlessly in batches.
+  - **UI Specialist Layout Tools**: Added transactional routing for `"ui/setup_canvas"`, `"ui/create_panel"`, `"ui/create_text"`, `"ui/create_button"`, and `"ui/setup_layout_group"` to ensure the UI Specialist's batch mutations run in a single atomic pass.
+  - **Project & Asset Tools**: Enabled transactional execution for `"project/create_prefab"` and `"project/create_tag_or_layer"`.
+- **Deserialization Extensions**: Extended the `TransactionOperation` class with the full suite of layout and asset creation parameters (`parentPath`, `textContent`, `fontSize`, `alignment`, `labelText`, `groupType`, `spacing`, `paddingCSV`, `childAlignment`, `destinationAssetPath`), ensuring they are successfully deserialized when sent as batch payloads.
+- **Robust Regex Fallback Parser**: Upgraded the `ParseOperationsFallback` JSON parser in `ToolDispatcher.cs` to dynamically extract these additional UI, structural, and layout properties when falling back to manual string-based JSON parsing.
 
 ### Fix B: Reference Wiring Prompt Hardening (PromptLibrary.cs)
-- **Coding Specialist & Generic Worker Prompts**: Injected a critical rule, **"Object Reference & Component Property Wiring Rules"**, as Rule #8 across both the `CODING_SPECIALIST` and `GENERIC_WORKER` prompts.
+- **Coding Specialist & Generic Worker Prompts**: Injected a critical rule, **"Object Reference & Component Property Wiring Rules"**, as Rule #8 across both the `CODING_SPECIALIST` and `GENERIC_WORKER` prompts (with properly-escaped double double-quotes to prevent C# verbatim string parsing errors).
 - **Explicit Hierarchy Paths**: Instructed the agents that when setting properties for `Transform` or `GameObject` fields via `scene/set_component_property` (or within batch transactions), they must use the **full scene path** of the target object (e.g. `"Building/EntryPoint"`), NOT the simple name of the GameObject as a plain string.
 - **No Parent-As-Child Assignments**: Explicitly banned the pattern of assigning a parent object's name when a child reference field is expected. Instructed the agents to inspect/verify the child exists and use `"ParentName/ChildName"` references.
 

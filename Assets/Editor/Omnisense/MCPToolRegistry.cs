@@ -1063,11 +1063,11 @@ namespace Omnisense
                     {
                         subResult = ModifyNode(op.path, op.property, op.value);
                     }
-                    else if (actionName == "add_component" || actionName == "addcomponent")
+                    else if (actionName == "add_component" || actionName == "addcomponent" || actionName == "scene/add_component")
                     {
                         subResult = ModifyNode(op.path, "add_component", string.IsNullOrEmpty(op.component) ? op.value : op.component);
                     }
-                    else if (actionName == "remove_component" || actionName == "removecomponent")
+                    else if (actionName == "remove_component" || actionName == "removecomponent" || actionName == "scene/remove_component")
                     {
                         subResult = ModifyNode(op.path, "remove_component", string.IsNullOrEmpty(op.component) ? op.value : op.component);
                     }
@@ -1075,7 +1075,7 @@ namespace Omnisense
                     {
                         subResult = SetComponentProperty(op.path, op.component, op.property, op.value);
                     }
-                    else if (actionName == "add_child")
+                    else if (actionName == "add_child" || actionName == "scene/add_child")
                     {
                         string parentPath = op.parent ?? op.path;
                         string childName = op.name;
@@ -1112,6 +1112,44 @@ namespace Omnisense
                                                    (!string.IsNullOrEmpty(op.name) ? op.name :
                                                    (!string.IsNullOrEmpty(op.component) ? op.component : op.value));
                         subResult = AddScriptComponent(op.path, scriptNameToAttach);
+                    }
+                    else if (actionName == "ui/setup_canvas" || actionName == "setup_canvas")
+                    {
+                        subResult = SetupCanvas();
+                    }
+                    else if (actionName == "ui/create_panel" || actionName == "create_panel")
+                    {
+                        subResult = CreateUIPanel(op.parentPath ?? op.parent ?? op.path, op.name);
+                    }
+                    else if (actionName == "ui/create_text" || actionName == "create_text")
+                    {
+                        subResult = CreateUIText(
+                            op.parentPath ?? op.parent ?? op.path, 
+                            op.name, 
+                            op.textContent ?? op.value, 
+                            op.fontSize == 0 ? 24 : op.fontSize, 
+                            string.IsNullOrEmpty(op.alignment) ? "Center" : op.alignment);
+                    }
+                    else if (actionName == "ui/create_button" || actionName == "create_button")
+                    {
+                        subResult = CreateUIButton(op.parentPath ?? op.parent ?? op.path, op.name, op.labelText ?? op.value);
+                    }
+                    else if (actionName == "ui/setup_layout_group" || actionName == "setup_layout_group")
+                    {
+                        subResult = SetupLayoutGroup(
+                            op.path, 
+                            op.groupType ?? op.type, 
+                            op.spacing, 
+                            string.IsNullOrEmpty(op.paddingCSV) ? "10,10,10,10" : op.paddingCSV, 
+                            string.IsNullOrEmpty(op.childAlignment) ? "UpperLeft" : op.childAlignment);
+                    }
+                    else if (actionName == "project/create_prefab" || actionName == "create_prefab")
+                    {
+                        subResult = CreatePrefab(op.path, op.destinationAssetPath ?? op.value);
+                    }
+                    else if (actionName == "project/create_tag_or_layer" || actionName == "create_tag_or_layer")
+                    {
+                        subResult = CreateTagOrLayer(op.type, op.name ?? op.value);
                     }
                     else
                     {
@@ -1767,6 +1805,19 @@ namespace Omnisense
         public string component;
         public string type;
         public string scriptName;
+
+        // UI Specialist & Asset Creator fields
+        public string parentPath;
+        public string textContent;
+        public int fontSize;
+        public string alignment;
+        public string labelText;
+        public string groupType;
+        public float spacing;
+        public string paddingCSV;
+        public string childAlignment;
+        public string destinationAssetPath;
+
         public List<string> components;
     }
 }

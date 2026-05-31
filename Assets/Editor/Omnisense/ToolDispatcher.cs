@@ -356,6 +356,20 @@ namespace Omnisense
                     op.value = ExtractJsonStringField(objJson, "value");
                     op.component = ExtractJsonStringField(objJson, "component");
                     op.type = ExtractJsonStringField(objJson, "type");
+                    op.scriptName = ExtractJsonStringField(objJson, "scriptName");
+
+                    op.parentPath = ExtractJsonStringField(objJson, "parentPath");
+                    op.textContent = ExtractJsonStringField(objJson, "textContent");
+                    string fontSizeStr = ExtractJsonStringField(objJson, "fontSize");
+                    if (!string.IsNullOrEmpty(fontSizeStr) && int.TryParse(fontSizeStr, out int fs)) op.fontSize = fs;
+                    op.alignment = ExtractJsonStringField(objJson, "alignment");
+                    op.labelText = ExtractJsonStringField(objJson, "labelText");
+                    op.groupType = ExtractJsonStringField(objJson, "groupType");
+                    string spacingStr = ExtractJsonStringField(objJson, "spacing");
+                    if (!string.IsNullOrEmpty(spacingStr) && float.TryParse(spacingStr, out float sp)) op.spacing = sp;
+                    op.paddingCSV = ExtractJsonStringField(objJson, "paddingCSV");
+                    op.childAlignment = ExtractJsonStringField(objJson, "childAlignment");
+                    op.destinationAssetPath = ExtractJsonStringField(objJson, "destinationAssetPath");
 
                     var compMatch = Regex.Match(objJson, @"""components""\s*:\s*\[([\s\S]*?)\]", RegexOptions.IgnoreCase);
                     if (compMatch.Success)
