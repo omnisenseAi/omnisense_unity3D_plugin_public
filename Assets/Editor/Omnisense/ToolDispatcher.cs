@@ -105,8 +105,15 @@ namespace Omnisense
                 case "scene/set_component_property":
                     return MCPToolRegistry.SetComponentProperty(p.path, p.component, p.property, p.value);
                 case "scene/execute_transactions":
-                    if (p.operations == null || p.operations.Count == 0)
+                    // JsonUtility may deserialize the list with the right count but all fields null
+                    // (when agent uses "method"/"params" nested format rather than flat "action"/"tool").
+                    // Trigger fallback if list is empty OR if all operations have no usable action name.
+                    if (p.operations == null || p.operations.Count == 0 ||
+                        p.operations.TrueForAll(o => string.IsNullOrEmpty(o.action) && string.IsNullOrEmpty(o.tool)))
+                    {
+                        Debug.Log($"[Omnisense-TxParse] Triggering fallback parser (operations={p.operations?.Count ?? 0}, all actions null={p.operations?.TrueForAll(o => string.IsNullOrEmpty(o.action) && string.IsNullOrEmpty(o.tool))})");
                         p.operations = ParseOperationsFallback(toolJson);
+                    }
                     return MCPToolRegistry.ExecuteTransactions(p.operations);
                 case "editor/read_console":
                     return MCPToolRegistry.ReadConsole();
@@ -267,7 +274,8 @@ namespace Omnisense
                     return $"<color=#FFFF00>~ Set Property:</color> {p.component}.{p.property} = '{p.value}' on {p.path}";
                 case "scene/execute_transactions":
                 {
-                    if (p.operations == null || p.operations.Count == 0)
+                    if (p.operations == null || p.operations.Count == 0 ||
+                        p.operations.TrueForAll(o => string.IsNullOrEmpty(o.action) && string.IsNullOrEmpty(o.tool)))
                         p.operations = ParseOperationsFallback(toolJson);
                     if (p.operations == null || p.operations.Count == 0)
                         return "<color=#FFFF00>~ Execute Transactions:</color> Empty transaction list.";
@@ -280,14 +288,18 @@ namespace Omnisense
                             list.Add($"  + Instantiate: {op.type} as '{op.name}'");
                         else if (act == "modify_node" || act == "scene/modify_node")
                             list.Add($"  ~ Modify Node '{op.path}': set {op.property} = '{op.value}'");
-                        else if (act == "add_component" || act == "addcomponent")
+                        else if (act == "add_component" || act == "addcomponent" || act == "scene/add_component")
                             list.Add($"  + Add Component: {op.component ?? op.value} on '{op.path}'");
-                        else if (act == "remove_component" || act == "removecomponent")
+                        else if (act == "remove_component" || act == "removecomponent" || act == "scene/remove_component")
                             list.Add($"  - Remove Component: {op.component ?? op.value} from '{op.path}'");
                         else if (act == "set_component_property" || act == "scene/set_component_property" || act == "set_property" || act == "setproperty")
                             list.Add($"  ~ Set Property: {op.component}.{op.property} = '{op.value}' on '{op.path}'");
-                        else if (act == "add_child")
+                        else if (act == "add_child" || act == "scene/add_child")
                             list.Add($"  + Add Child '{op.name}' to '{op.parent ?? op.path}' with components [{(op.components != null ? string.Join(", ", op.components) : op.component)}]");
+                        else if (act == "add_script_component" || act == "scene/add_script_component")
+                            list.Add($"  + Attach Script: '{op.scriptName ?? op.name ?? op.component}' on '{op.path}'");
+                        else
+                            list.Add($"  ? Unknown op: '{act}' on '{op.path}'");
                     }
                     return $"<color=#FFFF00>~ Execute Transactions (Batched {p.operations.Count} operations):</color>\n{string.Join("\n", list)}";
                 }
@@ -338,51 +350,80 @@ namespace Omnisense
             var list = new List<TransactionOperation>();
             try
             {
-                var match = Regex.Match(rawJson, @"""operations""\s*:\s*\[([\s\S]*?)\]", RegexOptions.IgnoreCase);
+                var match = Regex.Match(rawJson, @"""operations""\s*:\s*\[", RegexOptions.IgnoreCase);
                 if (!match.Success) return list;
 
-                string arrayContent = match.Groups[1].Value;
-                var objMatches = Regex.Matches(arrayContent, @"\{([\s\S]*?)\}");
-                foreach (Match objMatch in objMatches)
+                int startIdx = match.Index + match.Length;
+                int depth = 1;
+                int endIdx = -1;
+                for (int i = startIdx; i < rawJson.Length; i++)
                 {
-                    string objJson = objMatch.Value;
-                    var op = new TransactionOperation();
-                    op.action = ExtractJsonStringField(objJson, "action") ?? ExtractJsonStringField(objJson, "tool");
-                    op.tool = ExtractJsonStringField(objJson, "tool");
-                    op.path = ExtractJsonStringField(objJson, "path");
-                    op.parent = ExtractJsonStringField(objJson, "parent");
-                    op.name = ExtractJsonStringField(objJson, "name");
-                    op.property = ExtractJsonStringField(objJson, "property");
-                    op.value = ExtractJsonStringField(objJson, "value");
-                    op.component = ExtractJsonStringField(objJson, "component");
-                    op.type = ExtractJsonStringField(objJson, "type");
-                    op.scriptName = ExtractJsonStringField(objJson, "scriptName");
+                    if (rawJson[i] == '[') depth++;
+                    else if (rawJson[i] == ']') depth--;
+                    if (depth == 0) { endIdx = i; break; }
+                }
 
-                    op.parentPath = ExtractJsonStringField(objJson, "parentPath");
-                    op.textContent = ExtractJsonStringField(objJson, "textContent");
-                    string fontSizeStr = ExtractJsonStringField(objJson, "fontSize");
-                    if (!string.IsNullOrEmpty(fontSizeStr) && int.TryParse(fontSizeStr, out int fs)) op.fontSize = fs;
-                    op.alignment = ExtractJsonStringField(objJson, "alignment");
-                    op.labelText = ExtractJsonStringField(objJson, "labelText");
-                    op.groupType = ExtractJsonStringField(objJson, "groupType");
-                    string spacingStr = ExtractJsonStringField(objJson, "spacing");
-                    if (!string.IsNullOrEmpty(spacingStr) && float.TryParse(spacingStr, out float sp)) op.spacing = sp;
-                    op.paddingCSV = ExtractJsonStringField(objJson, "paddingCSV");
-                    op.childAlignment = ExtractJsonStringField(objJson, "childAlignment");
-                    op.destinationAssetPath = ExtractJsonStringField(objJson, "destinationAssetPath");
+                if (endIdx == -1) return list;
+                string arrayContent = rawJson.Substring(startIdx, endIdx - startIdx);
 
-                    var compMatch = Regex.Match(objJson, @"""components""\s*:\s*\[([\s\S]*?)\]", RegexOptions.IgnoreCase);
-                    if (compMatch.Success)
+                int objStart = -1;
+                depth = 0;
+                for (int i = 0; i < arrayContent.Length; i++)
+                {
+                    if (arrayContent[i] == '{') { if (depth == 0) objStart = i; depth++; }
+                    else if (arrayContent[i] == '}')
                     {
-                        op.components = new List<string>();
-                        var comps = Regex.Matches(compMatch.Groups[1].Value, @"""([^""]+)""");
-                        foreach (Match c in comps)
+                        depth--;
+                        if (depth == 0 && objStart != -1)
                         {
-                            op.components.Add(c.Groups[1].Value);
+                            string objJson = arrayContent.Substring(objStart, i - objStart + 1);
+                            
+                            // Extract all key-value pairs into a single flat dictionary
+                            var flat = new Dictionary<string, string>();
+                            var kvMatches = Regex.Matches(objJson, @"""([^""]+)""\s*:\s*(?:""([^""]*)""|([^,}\s]+))");
+                            foreach (Match kv in kvMatches)
+                            {
+                                string val = !string.IsNullOrEmpty(kv.Groups[2].Value) ? kv.Groups[2].Value : kv.Groups[3].Value;
+                                flat[kv.Groups[1].Value] = val;
+                            }
+
+                            var op = new TransactionOperation();
+                            op.action = flat.GetValueOrDefault("action") ?? flat.GetValueOrDefault("tool") ?? flat.GetValueOrDefault("method");
+                            op.tool = op.action;
+                            op.path = flat.GetValueOrDefault("path");
+                            op.parent = flat.GetValueOrDefault("parent");
+                            op.name = flat.GetValueOrDefault("name");
+                            op.property = flat.GetValueOrDefault("property");
+                            op.value = flat.GetValueOrDefault("value");
+                            op.component = flat.GetValueOrDefault("component");
+                            op.type = flat.GetValueOrDefault("type");
+                            op.scriptName = flat.GetValueOrDefault("scriptName");
+                            op.parentPath = flat.GetValueOrDefault("parentPath");
+                            op.textContent = flat.GetValueOrDefault("textContent");
+                            if (int.TryParse(flat.GetValueOrDefault("fontSize"), out int fs)) op.fontSize = fs;
+                            op.alignment = flat.GetValueOrDefault("alignment");
+                            op.labelText = flat.GetValueOrDefault("labelText");
+                            op.groupType = flat.GetValueOrDefault("groupType");
+                            if (float.TryParse(flat.GetValueOrDefault("spacing"), out float sp)) op.spacing = sp;
+                            op.paddingCSV = flat.GetValueOrDefault("paddingCSV");
+                            op.childAlignment = flat.GetValueOrDefault("childAlignment");
+                            op.destinationAssetPath = flat.GetValueOrDefault("destinationAssetPath");
+
+                            var compMatch = Regex.Match(objJson, @"""components""\s*:\s*\[([^\]]*)\]");
+                            if (compMatch.Success)
+                            {
+                                op.components = new List<string>();
+                                foreach (Match c in Regex.Matches(compMatch.Groups[1].Value, @"""([^""]+)"""))
+                                    op.components.Add(c.Groups[1].Value);
+                            }
+                            if (!string.IsNullOrEmpty(op.action))
+                            {
+                                Debug.Log($"[Omnisense-TxParse] Parsed op: action='{op.action}' path='{op.path}' name='{op.name}' type='{op.type}' scriptName='{op.scriptName}'");
+                                list.Add(op);
+                            }
+                            objStart = -1;
                         }
                     }
-
-                    list.Add(op);
                 }
             }
             catch (Exception ex)

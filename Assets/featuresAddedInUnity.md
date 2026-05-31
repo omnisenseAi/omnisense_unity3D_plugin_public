@@ -433,3 +433,82 @@ Analyzing logs from `UnityTest6.txt` and subsequent multi-agent test runs reveal
 - **Explicit Hierarchy Paths**: Instructed the agents that when setting properties for `Transform` or `GameObject` fields via `scene/set_component_property` (or within batch transactions), they must use the **full scene path** of the target object (e.g. `"Building/EntryPoint"`), NOT the simple name of the GameObject as a plain string.
 - **No Parent-As-Child Assignments**: Explicitly banned the pattern of assigning a parent object's name when a child reference field is expected. Instructed the agents to inspect/verify the child exists and use `"ParentName/ChildName"` references.
 
+---
+
+## 49. Historical Staging Queue Metadata & Premium System Message Styling (Phase 48)
+
+### Problem Solved
+When a user reviewed staged actions in the Deferred Approval Queue and clicked "Apply" or "Reject", the staging review panel disappeared entirely. It was replaced by a single, generic System chat bubble stating `✅ Approved N action(s)` or `❌ Staged actions rejected`. There was no way to review which specific actions had been executed or rejected after the queue cleared, creating a major documentation gap for developers tracking changes.
+
+### Fix A: Historical Action Metadata Collection (OmnisenseWindow.cs)
+- **Detailed Action Auditing**: Modified both the "Apply Changes" and "Reject All" click callbacks to dynamically compile a comprehensive text report of all actions processed in that turn:
+  - Collects timestamps, diff summaries (e.g., component additions, parenting, parameter edits), and tool methods for every staged action.
+  - Automatically divides and tags them into `Approved Action(s)` and `Rejected Action(s)` sections.
+- **Trace Integration**: Sanitizes diff summaries using a custom regex helper `RemoveColorTags` (stripping out Unity visual rich-text tags like `<color>` and `<b>` for flat text compatibility) and attaches the generated reports as the `fullContent` payload for System messages.
+
+### Fix B: Collapsible System Message Foldouts & USS Styling (OmnisenseWindow.cs & .uss)
+- **Collapsible System Foldouts**: Upgraded `CreateMessageElement()` to allow the `"System"` sender to display collapsible execution detail foldouts when `fullContent` is present (previously restricted solely to `"AI"` sender traces). 
+- **Tailored Foldout Title**: Re-labeled the System foldout header to `"📁 View Approved/Rejected Action Details"` for clean context.
+- **Premium System Message Bubbles**: Added a dedicated styling rule for `.system-message-bubble` in `OmnisenseWindow.uss`. System bubbles are styled with a sleek dark slate background (`#1a1e24`), a modern, high-contrast left border accent (`#007acc`), stretch-to-fit sizing, and premium, highly-legible secondary text.
+
+---
+
+## 50. `scene/execute_transactions` Silent Failure Root Cause Fix (Phase 49)
+
+### Problem Solved
+Analysis of `UnityTest8.txt` logs revealed that `scene/execute_transactions` calls with 6 batched operations (including `instantiate_node`, `add_script_component`, `modify_node`) silently executed with **zero actual scene changes** — no Courthouse GameObject was created despite the approval queue executing successfully.
+
+### Root Cause: Triple Bug in `ParseOperationsFallback` + Wrong Fallback Trigger
+
+The AI agent uses a `"method"` / `"params"` nested JSON format for each operation inside a transaction batch:
+```json
+{
+  "method": "instantiate_node",
+  "params": { "type": "Empty", "name": "Courthouse" }
+}
+```
+
+But `MCPToolParams.operations` uses `TransactionOperation` which only has `action` / `tool` fields and **flat** (non-nested) parameters. This caused a **triple failure**:
+
+**Bug 1 — Wrong Fallback Trigger Condition** (`ToolDispatcher.cs`, line 108):
+Unity's `JsonUtility.FromJson` successfully deserializes the operations list with the correct count (e.g., 6 items) but all `action`, `tool`, and field values are **null** — because the JSON uses `"method"` (not `"action"`) and nested `"params"` (not flat fields). The old guard `if (p.operations == null || p.operations.Count == 0)` returned `false` (since count was 6), so `ParseOperationsFallback` was **never called**. All 6 operations dispatched with empty action strings and hit the `else` branch returning `"Unknown transaction action or tool: ''"`.
+
+**Bug 2 — Lazy Regex Breaking on Nested Objects** (Old `ParseOperationsFallback`):
+Even when the fallback parser ran, it used `Regex.Matches(arrayContent, @"\{([\s\S]*?)\}")` — the lazy `?` caused it to stop at the **first** `}` it found. For any operation with a nested `"params": { ... }` sub-object, the regex would terminate at the inner `}`, corrupting the extraction and producing truncated partial objects.
+
+**Bug 3 — Missing `"method"` as Action Field Synonym**:
+The old parser only looked for `"action"` or `"tool"` as the operation name field, but the agent always uses `"method"`. So even if an operation was correctly extracted, `op.action` remained null and the operation was skipped.
+
+### Fix: Three-Part Repair in `ToolDispatcher.cs`
+
+**Fix 1 — Smarter Fallback Trigger** (lines 107–116):
+Added a third condition to the execute_transactions dispatch case: if the operations list is non-empty but **all operations have null `action` and `tool` fields** (detected via `TrueForAll`), trigger `ParseOperationsFallback`. This catches the "JsonUtility gave us empty shells" scenario.
+```csharp
+if (p.operations == null || p.operations.Count == 0 ||
+    p.operations.TrueForAll(o => string.IsNullOrEmpty(o.action) && string.IsNullOrEmpty(o.tool)))
+{
+    p.operations = ParseOperationsFallback(toolJson);
+}
+```
+Same fix applied to `GenerateDiffSummary` so the staging panel correctly displays operation details.
+
+**Fix 2 — Bracket-Counting Array Extraction** (`ParseOperationsFallback` rewrite):
+Replaced the lazy regex `[\s\S]*?` with proper **bracket-counting** to extract the exact array content and each operation object:
+1. Find `"operations": [` then count `[`/`]` to locate the true array end.
+2. Scan array content counting `{`/`}` with depth tracking — each time depth returns to 0, extract the complete operation blob (including any nested `"params"` sub-object).
+This correctly handles arbitrarily-nested operation formats.
+
+**Fix 3 — `"method"` as Action Field Synonym** (line 379):
+Extended the action field extraction to also try `"method"` as a fallback:
+```csharp
+op.action = flat["action"] ?? flat["tool"] ?? flat["method"];
+```
+Uses a flat `Dictionary<string, string>` populated by a regex that scans all `"key": "value"` pairs across the entire object blob (including nested `"params"` content), giving correct field extraction regardless of nesting depth.
+
+**Fix 4 — `add_script_component` in `GenerateDiffSummary` loop**:
+Added display support for `add_script_component` operations inside transaction diffs, so the approval panel correctly shows `+ Attach Script: 'BuildingTransition' on 'Courthouse'` instead of falling through to `? Unknown op`.
+
+### Debug Logging Added
+- `[Omnisense-TxParse]` log prefix: When the fallback parser runs, logs each parsed operation (action, path, name, type, scriptName) for easy diagnosis in future test logs.
+- Fallback trigger now logs why it fired (count and whether all-null condition was met).
+

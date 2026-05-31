@@ -484,3 +484,20 @@
     background-color: rgba(255, 255, 255, 0.2);
     color: #007acc;
 }
+
+/* System Message Bubble */
+.system-message-bubble {
+    background-color: #1a1e24;
+    border-left-width: 3px;
+    border-left-color: #007acc;
+    align-self: stretch;
+    margin-left: 5%;
+    margin-right: 5%;
+    padding: 8px 12px;
+}
+
+.system-message-bubble .selectable-message-text, 
+.system-message-bubble .selectable-message-text .unity-base-text-field__input {
+    color: #adb5bd;
+    font-size: 11px;
+}

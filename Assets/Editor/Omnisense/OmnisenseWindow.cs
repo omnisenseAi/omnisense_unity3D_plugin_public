@@ -809,7 +809,36 @@ namespace Omnisense
                     if (kvp.Value.value) approvedIds.Add(kvp.Key);
                 int rejected = actions.Count - approvedIds.Count;
                 Debug.Log($"[Omnisense-ApprovalQueue] User approved {approvedIds.Count}, rejected {rejected} staged action(s).");
-                AddMessageToChat("System", $"✅ Approved {approvedIds.Count} action(s). {(rejected > 0 ? $"{rejected} rejected." : "")}");
+                
+                var approvedList = new List<string>();
+                var rejectedList = new List<string>();
+                foreach (var action in actions)
+                {
+                    string summaryText = RemoveColorTags(action.DiffSummary);
+                    string actionDetail = $"- [{action.Timestamp}] {summaryText} ({action.ToolCall?.method})";
+                    if (approvedIds.Contains(action.Id))
+                        approvedList.Add(actionDetail);
+                    else
+                        rejectedList.Add(actionDetail);
+                }
+
+                System.Text.StringBuilder sb = new System.Text.StringBuilder();
+                sb.AppendLine("Approved Action(s):");
+                if (approvedList.Count > 0)
+                    sb.AppendLine(string.Join("\n", approvedList));
+                else
+                    sb.AppendLine("(None)");
+
+                if (rejectedList.Count > 0)
+                {
+                    sb.AppendLine("\nRejected Action(s):");
+                    sb.AppendLine(string.Join("\n", rejectedList));
+                }
+
+                string content = $"✅ Approved {approvedIds.Count} action(s). {(rejected > 0 ? $"{rejected} rejected." : "")}";
+                string fullContent = sb.ToString();
+
+                AddMessageToChat("System", content, showCopyButton: false, turnId: "", fullContent: fullContent);
                 commitCallback?.Invoke(approvedIds);
             }) { text = $"✓ Apply {actions.Count} Change(s)" };
             btnApproveAll.style.backgroundColor = new Color(0.15f, 0.48f, 0.20f);
@@ -821,7 +850,22 @@ namespace Omnisense
             var btnRejectAll = new Button(() => {
                 panel.RemoveFromHierarchy();
                 Debug.Log("[Omnisense-ApprovalQueue] User rejected ALL staged actions.");
-                AddMessageToChat("System", $"❌ All {actions.Count} staged action(s) rejected. No changes written to disk.");
+                
+                var rejectedList = new List<string>();
+                foreach (var action in actions)
+                {
+                    string summaryText = RemoveColorTags(action.DiffSummary);
+                    rejectedList.Add($"- [{action.Timestamp}] {summaryText} ({action.ToolCall?.method})");
+                }
+                
+                System.Text.StringBuilder sb = new System.Text.StringBuilder();
+                sb.AppendLine("Rejected Action(s):");
+                sb.AppendLine(string.Join("\n", rejectedList));
+
+                string content = $"❌ All {actions.Count} staged action(s) rejected. No changes written to disk.";
+                string fullContent = sb.ToString();
+
+                AddMessageToChat("System", content, showCopyButton: false, turnId: "", fullContent: fullContent);
                 commitCallback?.Invoke(Array.Empty<string>());
             }) { text = "✗ Reject All" };
             btnRejectAll.style.backgroundColor = new Color(0.5f, 0.15f, 0.15f);
@@ -1017,7 +1061,12 @@ namespace Omnisense
         {
             var msgContainer = new VisualElement();
             msgContainer.AddToClassList("message-container");
-            msgContainer.AddToClassList(sender == "User" ? "user-message" : "ai-message");
+            if (sender == "User")
+                msgContainer.AddToClassList("user-message");
+            else if (sender == "System")
+                msgContainer.AddToClassList("system-message-bubble");
+            else
+                msgContainer.AddToClassList("ai-message");
 
             // Parse for special blocks (thought, observation, code)
             if (content.Contains("<thought>"))
@@ -1094,9 +1143,10 @@ namespace Omnisense
                 }
             }
 
-            if (sender == "AI" && !string.IsNullOrEmpty(fullContent) && fullContent.Trim() != content.Trim())
+            if ((sender == "AI" || sender == "System") && !string.IsNullOrEmpty(fullContent) && fullContent.Trim() != content.Trim())
             {
-                var foldout = new Foldout { text = "📁 View Full Technical Execution Trace", value = false };
+                string foldoutText = sender == "System" ? "📁 View Approved/Rejected Action Details" : "📁 View Full Technical Execution Trace";
+                var foldout = new Foldout { text = foldoutText, value = false };
                 foldout.style.marginTop = 10;
                 foldout.style.borderTopWidth = 1;
                 foldout.style.borderTopColor = new Color(0.3f, 0.3f, 0.3f, 0.5f);
@@ -1205,6 +1255,18 @@ namespace Omnisense
             }
 
             return msgContainer;
+        }
+
+        private string RemoveColorTags(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return text;
+            text = Regex.Replace(text, @"<color=[^>]+>", "", RegexOptions.IgnoreCase);
+            text = Regex.Replace(text, @"</color>", "", RegexOptions.IgnoreCase);
+            text = Regex.Replace(text, @"<b>", "", RegexOptions.IgnoreCase);
+            text = Regex.Replace(text, @"</b>", "", RegexOptions.IgnoreCase);
+            text = Regex.Replace(text, @"<i>", "", RegexOptions.IgnoreCase);
+            text = Regex.Replace(text, @"</i>", "", RegexOptions.IgnoreCase);
+            return text;
         }
 
         private void ShowHistory()
