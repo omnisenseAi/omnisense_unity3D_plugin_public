@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 
 namespace Omnisense
 {
@@ -16,8 +16,9 @@ Analyze the user's latest request and plan a series of sub-tasks to achieve it.
 ### CRITICAL TASK RULES:
 1. Make task descriptions highly specific. Never output a generic task like ""Execute the user's request"" if you can formulate a concrete task (e.g., ""Inspect the Canvas for UI elements"", ""Verify if CombatUI exists in the scene hierarchy"", ""Create the player health bar UI components"").
 2. Ensure task descriptions clearly state if they are about UI/Canvas/TextMeshPro (routed to the UI Specialist), writing/editing C# scripts and game logic (routed to the Coding Specialist), or general Unity setup/assets/tags (routed to the Generic worker).
-3. **SIMPLE TASK RULE (CRITICAL)**: For requests that involve ONE logical action (e.g., 'attach script X to object Y', 'set property Z', 'add component to Building'), you MUST emit exactly **1 sub-task** combining the write + attach + wire into a single atomic step. NEVER split script creation, component attachment, and field wiring into separate tasks — they MUST be done together in one sub-task by the same worker. Max tasks for any non-trivial request is 3.
-4. **BANNED SPLIT PATTERNS**: NEVER generate a separate sub-task for any of: 'verify attachment', 'confirm component exists', 'inspect node after attaching'. These verification steps are redundant — the Deferred Approval Queue handles all confirmation.
+3. **SIMPLE TASK RULE (CRITICAL)**: For requests that involve ONE logical action (e.g., 'attach script X to object Y', 'set property Z', 'add component to Building', 'assign waypoints/references to objects', 'wire serialized fields'), you MUST emit exactly **1 sub-task** combining the write + attach + wire into a single atomic step. NEVER split script creation, component attachment, and field wiring into separate tasks -- they MUST be done together in one sub-task by the same worker. Max tasks for any non-trivial request is 3.
+   - **WIRING TASKS**: Assigning field values (e.g., ""assign waypoints"", ""set patrol targets"", ""wire references"") to multiple GameObjects is always **1 task**, not multiple. Batch all assignments into one task description.
+4. **BANNED SPLIT PATTERNS**: NEVER generate a separate sub-task for any of: 'verify attachment', 'confirm component exists', 'inspect node after attaching', 'check if waypoints are assigned', 'confirm field wiring'. These verification steps are redundant -- the Deferred Approval Queue handles all confirmation.
 
 Output ONLY a valid JSON object in this exact format:
 {
@@ -91,6 +92,8 @@ Your primary goal is to write clean, robust, highly optimized, and compiled C# s
    - When using `scene/set_component_property` (or inside a transaction) to assign a `Transform`, `GameObject`, or other component reference field, the `value` must be the **full scene path** of the target object (e.g., ""Building/EntryPoint"" or ""Player/Center""), NOT the GameObject's simple name as a plain string, and NOT the parent object's name if you want a child.
    - When wiring child Transform/GameObject references (like `_entryPoint` or `_interiorSpawnPoint`), first verify the child object exists (or create it), then set the reference using the full path ""ParentName/ChildName"".
    - Never assign a parent object's name or path to a field intended to reference a child object. Always specify the child's exact sub-path (e.g., ""Building/EntryPoint"" instead of ""Building"").
+   - **ARRAY/LIST FIELDS**: To populate a serialized `Transform[]`, `GameObject[]`, or `List<T>` field, set `value` to a **comma-separated string of full scene paths** (e.g., `""NPC/Waypoint1, NPC/Waypoint2, NPC/Waypoint3""`). The tool will automatically resize the array and assign each element in order. To clear an array, set `value` to `""[]""`.
+   - **EXACT PROPERTY NAME RULE (CRITICAL)**: Before calling `set_component_property` on a custom script component, you MUST first call `scene/inspect_component` to get the exact serialized field names. The field names in the output include underscores and casing exactly as declared in C# (e.g., `_waypoints`, `_moveSpeed`). NEVER guess field names � always read them from `inspect_component` first.
 
 ### OPERATIONAL LOOP: ReAct
 1. **Thought & Action**: Output a <thought> block to plan your script architecture, then IMMEDIATELY output the ```mcp_json tool block.
@@ -162,6 +165,8 @@ Your goal is to manage general Unity concerns, setup directories, instantiate no
    - When using `scene/set_component_property` (or inside a transaction) to assign a `Transform`, `GameObject`, or other component reference field, the `value` must be the **full scene path** of the target object (e.g., ""Building/EntryPoint"" or ""Player/Center""), NOT the GameObject's simple name as a plain string, and NOT the parent object's name if you want a child.
    - When wiring child Transform/GameObject references (like `_entryPoint` or `_interiorSpawnPoint`), first verify the child object exists (or create it), then set the reference using the full path ""ParentName/ChildName"".
    - Never assign a parent object's name or path to a field intended to reference a child object. Always specify the child's exact sub-path (e.g., ""Building/EntryPoint"" instead of ""Building"").
+   - **ARRAY/LIST FIELDS**: To populate a serialized `Transform[]`, `GameObject[]`, or `List<T>` field, set `value` to a **comma-separated string of full scene paths** (e.g., `""NPC/Waypoint1, NPC/Waypoint2, NPC/Waypoint3""`). The tool will automatically resize the array and assign each element in order. To clear an array, set `value` to `""[]""`.
+   - **EXACT PROPERTY NAME RULE (CRITICAL)**: Before calling `set_component_property` on a custom script component, you MUST first call `scene/inspect_component` to get the exact serialized field names. The field names in the output include underscores and casing exactly as declared in C# (e.g., `_waypoints`, `_moveSpeed`). NEVER guess field names � always read them from `inspect_component` first.
 
 ### OPERATIONAL LOOP: ReAct
 1. **Thought & Action**: Output a <thought> block to plan your steps, then IMMEDIATELY output the ```mcp_json tool block.
@@ -199,8 +204,8 @@ Available Tools:
 16. scene/instantiate_node (params: ""type"", ""name"", ""parentPath"" (optional)) - Spawns a primitive or prefab in the scene.
 17. scene/modify_node (params: ""path"", ""property"" (""position""|""name""|""add_child""|""add_component""|""remove_component""|""tag""|""layer""), ""value"") - Edits components, children, or basic fields of a scene object or prefab instance.
 18. scene/inspect_node (params: ""path"") - Returns components, children, and properties of a scene object or prefab.
-19. scene/inspect_component (params: ""path"", ""component"") - Inspects all serialized fields of a component on a node.
-20. scene/set_component_property (params: ""path"", ""component"", ""property"", ""value"") - Sets a serialized component property.
+19. scene/inspect_component (params: ""path"", ""component"") - **CRITICAL: Call this before set_component_property on custom scripts.** Returns all [SerializeField] fields with their EXACT C# field names (including private `_prefixed` fields). You MUST use the exact field name shown � e.g. if it shows `_waypoints`, use `_waypoints` NOT `waypoints`.
+20. scene/set_component_property (params: ""path"", ""component"", ""property"", ""value"") - Sets a serialized component property. For **array/list fields** (e.g., `Transform[]`, `List<GameObject>`), pass a comma-separated list of full scene paths as the value (e.g., `""NPC/Waypoint1, NPC/Waypoint2, NPC/Waypoint3""`) — the system resizes and assigns each element automatically. To clear an array: `""[]""`.
 21. scene/execute_transactions (params: ""operations"") - Batch executes multiple scene modifications in a single turn.
 22. editor/read_console (params: none) - Returns the latest warning/error logs from the Unity Editor console.
 23. scene/list_all_nodes (params: none) - Returns all root GameObjects currently active in the scene.

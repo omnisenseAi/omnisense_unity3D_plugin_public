@@ -885,21 +885,77 @@ namespace Omnisense
                 }
 
                 System.Text.StringBuilder sb = new System.Text.StringBuilder();
-                sb.AppendLine($"--- {componentName} Properties ---");
-                
-                var properties = comp.GetType().GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
-                foreach (var p in properties)
+                sb.AppendLine($"--- {comp.GetType().Name} Serialized Fields ---");
+                sb.AppendLine("(Use the EXACT 'fieldName' shown below as the 'property' param in set_component_property)");
+                sb.AppendLine();
+
+                // PRIMARY: Use SerializedObject to surface ALL [SerializeField] fields (public AND private)
+                SerializedObject so = new SerializedObject(comp);
+                SerializedProperty iterator = so.GetIterator();
+                bool enterChildren = true;
+                int fieldCount = 0;
+                while (iterator.NextVisible(enterChildren))
                 {
-                    if (p.CanRead && p.CanWrite)
+                    enterChildren = false;
+                    if (iterator.name == "m_Script") continue; // skip built-in
+
+                    string typeLabel = iterator.propertyType.ToString();
+                    string valueLabel = "";
+                    switch (iterator.propertyType)
                     {
-                        try { sb.AppendLine($"{p.Name} ({p.PropertyType.Name}): {p.GetValue(comp)}"); } catch { }
+                        case SerializedPropertyType.Integer:       valueLabel = iterator.intValue.ToString(); break;
+                        case SerializedPropertyType.Float:         valueLabel = iterator.floatValue.ToString("F3"); break;
+                        case SerializedPropertyType.Boolean:       valueLabel = iterator.boolValue.ToString(); break;
+                        case SerializedPropertyType.String:        valueLabel = $"\"{iterator.stringValue}\""; break;
+                        case SerializedPropertyType.Enum:
+                            valueLabel = (iterator.enumNames.Length > iterator.enumValueIndex && iterator.enumValueIndex >= 0)
+                                ? iterator.enumNames[iterator.enumValueIndex] : iterator.enumValueIndex.ToString(); break;
+                        case SerializedPropertyType.ObjectReference:
+                            valueLabel = iterator.objectReferenceValue != null ? iterator.objectReferenceValue.name : "null"; break;
+                        case SerializedPropertyType.Vector2:  valueLabel = iterator.vector2Value.ToString(); break;
+                        case SerializedPropertyType.Vector3:  valueLabel = iterator.vector3Value.ToString(); break;
+                        case SerializedPropertyType.Vector4:  valueLabel = iterator.vector4Value.ToString(); break;
+                        case SerializedPropertyType.Color:    valueLabel = iterator.colorValue.ToString(); break;
+                        case SerializedPropertyType.Generic:
+                            if (iterator.isArray)
+                            {
+                                typeLabel = $"Array[{iterator.arraySize}]";
+                                valueLabel = $"(size={iterator.arraySize})";
+                                var elements = new List<string>();
+                                for (int i = 0; i < Mathf.Min(iterator.arraySize, 6); i++)
+                                {
+                                    SerializedProperty elem = iterator.GetArrayElementAtIndex(i);
+                                    elements.Add(elem.propertyType == SerializedPropertyType.ObjectReference
+                                        ? (elem.objectReferenceValue != null ? elem.objectReferenceValue.name : "null")
+                                        : elem.propertyType.ToString());
+                                }
+                                if (elements.Count > 0) valueLabel += $" [{string.Join(", ", elements)}{(iterator.arraySize > 6 ? ", ..." : "")}]";
+                            }
+                            break;
+                        default: valueLabel = "(complex)"; break;
                     }
+                    sb.AppendLine($"  {iterator.name} ({typeLabel}): {valueLabel}");
+                    fieldCount++;
                 }
 
-                var fields = comp.GetType().GetFields(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
-                foreach (var f in fields)
+                if (fieldCount == 0)
                 {
-                    try { sb.AppendLine($"{f.Name} ({f.FieldType.Name}): {f.GetValue(comp)}"); } catch { }
+                    sb.AppendLine("  (No serialized fields found — this component may only have base MonoBehaviour properties)");
+                    sb.AppendLine();
+                    sb.AppendLine("--- Public Properties (via Reflection) ---");
+                    var properties = comp.GetType().GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                    foreach (var p in properties)
+                    {
+                        if (p.CanRead && p.CanWrite)
+                        {
+                            try { sb.AppendLine($"  {p.Name} ({p.PropertyType.Name}): {p.GetValue(comp)}"); } catch { }
+                        }
+                    }
+                    var fields = comp.GetType().GetFields(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                    foreach (var f in fields)
+                    {
+                        try { sb.AppendLine($"  {f.Name} ({f.FieldType.Name}): {f.GetValue(comp)}"); } catch { }
+                    }
                 }
 
                 return new ToolResult { success = true, observation = sb.ToString() };

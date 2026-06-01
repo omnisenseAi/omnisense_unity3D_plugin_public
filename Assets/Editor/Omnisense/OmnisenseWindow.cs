@@ -1022,7 +1022,9 @@ namespace Omnisense
             if (_currentSession != null)
             {
                 // SOTA Database Consolidation: Update existing message in the session if it shares the same turnId and sender
-                var existingMsg = _currentSession.messages.FindLast(m => m.turnId == turnId && m.sender == sender);
+                var existingMsg = !string.IsNullOrEmpty(turnId) 
+                    ? _currentSession.messages.FindLast(m => m.turnId == turnId && m.sender == sender)
+                    : null;
                 if (existingMsg != null)
                 {
                     existingMsg.content = content;
@@ -1120,9 +1122,10 @@ namespace Omnisense
 
             if (!string.IsNullOrEmpty(content))
             {
-                var textField = new TextField { value = content, isReadOnly = true, multiline = true };
-                textField.AddToClassList("selectable-message-text");
-                msgContainer.Add(textField);
+                var label = new Label(content);
+                label.enableRichText = true;
+                label.AddToClassList("selectable-message-text");
+                msgContainer.Add(label);
 
                 if (sender == "AI")
                 {
@@ -1152,7 +1155,8 @@ namespace Omnisense
                 foldout.style.borderTopColor = new Color(0.3f, 0.3f, 0.3f, 0.5f);
                 foldout.style.paddingTop = 5;
 
-                var traceText = new TextField { value = fullContent, isReadOnly = true, multiline = true };
+                var traceText = new Label(fullContent);
+                traceText.enableRichText = true;
                 traceText.AddToClassList("selectable-message-text");
                 foldout.Add(traceText);
                 msgContainer.Add(foldout);
