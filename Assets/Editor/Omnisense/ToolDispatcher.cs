@@ -44,6 +44,12 @@ namespace Omnisense
 
         // scene/add_script_component field
         public string scriptName;
+
+        // Knowledge Graph / Semantic Metadata Fields
+        public string role;
+        public string group;
+        public string waypoint_group;
+        public string script;
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -74,6 +80,12 @@ namespace Omnisense
                     return MCPToolRegistry.ReadFile(p.path);
                 case "project/update_dna":
                     return MCPToolRegistry.UpdateDNA(p.content);
+                case "scene/get_semantic_metadata":
+                    return MCPToolRegistry.GetSemanticMetadata();
+                case "scene/update_semantic_metadata":
+                    return MCPToolRegistry.UpdateSemanticMetadata(p.path, p.role, p.group, p.waypoint_group, p.script, p.value);
+                case "scene/scan_and_build_graph":
+                    return MCPToolRegistry.ScanAndBuildGraph();
                 case "project/inspect_asset":
                     return MCPToolRegistry.InspectAsset(p.path);
                 case "scene/instantiate_node":
@@ -185,6 +197,9 @@ namespace Omnisense
                 case "scene/inspect_component":
                 case "editor/read_console":
                 case "project/update_dna":   // DNA updates are internal bookkeeping
+                case "scene/get_semantic_metadata":
+                case "scene/update_semantic_metadata":
+                case "scene/scan_and_build_graph":
                     return ApprovalMode.AutoApprove;
             }
 

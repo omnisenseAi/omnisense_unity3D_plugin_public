@@ -138,6 +138,55 @@ namespace Omnisense
             }
         }
 
+        public static ToolResult GetSemanticMetadata()
+        {
+            Debug.Log($"[Omnisense] Tool: GetSemanticMetadata()");
+            try
+            {
+                var data = OmnisenseKnowledgeGraph.Load();
+                string cleanJson = OmnisenseKnowledgeGraph.ExportToCleanJson(data);
+                return new ToolResult { success = true, observation = cleanJson };
+            }
+            catch (Exception e)
+            {
+                return new ToolResult { success = false, error = e.Message };
+            }
+        }
+
+        public static ToolResult UpdateSemanticMetadata(string path, string role, string group, string waypoint_group, string script, string value)
+        {
+            Debug.Log($"[Omnisense] Tool: UpdateSemanticMetadata(path='{path}', role='{role}')");
+            try
+            {
+                if (string.IsNullOrEmpty(path))
+                    return new ToolResult { success = false, error = "Path is required." };
+                if (string.IsNullOrEmpty(role))
+                    return new ToolResult { success = false, error = "Role is required." };
+
+                OmnisenseKnowledgeGraph.UpdateEntry(path, role, group, waypoint_group, script, value);
+                return new ToolResult { success = true, observation = $"Semantic metadata for '{path}' updated successfully." };
+            }
+            catch (Exception e)
+            {
+                return new ToolResult { success = false, error = e.Message };
+            }
+        }
+
+        public static ToolResult ScanAndBuildGraph()
+        {
+            Debug.Log($"[Omnisense] Tool: ScanAndBuildGraph()");
+            try
+            {
+                var data = OmnisenseKnowledgeGraph.Load(true);
+                string summary = OmnisenseKnowledgeGraph.GetCompactSummary();
+                return new ToolResult { success = true, observation = $"Heuristic scene scan complete and knowledge graph rebuilt.\n\n{summary}" };
+            }
+            catch (Exception e)
+            {
+                return new ToolResult { success = false, error = e.Message };
+            }
+        }
+
         public static ToolResult InspectAsset(string path)
         {
             Debug.Log($"[Omnisense] Tool: InspectAsset(path='{path}')");
@@ -940,7 +989,7 @@ namespace Omnisense
 
                 if (fieldCount == 0)
                 {
-                    sb.AppendLine("  (No serialized fields found — this component may only have base MonoBehaviour properties)");
+                    sb.AppendLine("  (No serialized fields found ï¿½ this component may only have base MonoBehaviour properties)");
                     sb.AppendLine();
                     sb.AppendLine("--- Public Properties (via Reflection) ---");
                     var properties = comp.GetType().GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);

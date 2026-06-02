@@ -195,8 +195,7 @@ namespace Omnisense
 
         public void ProcessPrompt(string prompt, string model, string turnId, Action<string, string, bool> onComplete)
         {
-            Debug.Log($"[Omnisense-Diagnostics] --- NEW TURN STARTED: {turnId} ---");
-            Debug.Log($"[Omnisense-Diagnostics] Processing prompt (Length: {prompt?.Length ?? 0} chars) with model: {model}");
+            OmnisenseLogger.StartNewTurn(turnId, prompt, model);
             _currentTurnTrace.Clear();
             _currentTurnTrace.AppendLine("[System]: Analyzing request and classifying intent...");
             _turnToolCount = 0;
@@ -247,6 +246,9 @@ namespace Omnisense
             {
                 // Flush approved actions to disk
                 var results = _approvalQueue.FlushApproved(approvedIds);
+
+                // Auto-update the scene semantic Knowledge Graph if any scene/UI modifications were made
+                OmnisenseKnowledgeGraph.AutoUpdateAfterActions(results);
 
                 // Track if any script files were written during the flush
                 foreach (var (action, result) in results)

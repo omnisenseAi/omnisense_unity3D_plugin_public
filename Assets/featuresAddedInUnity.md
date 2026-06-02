@@ -512,3 +512,28 @@ Added display support for `add_script_component` operations inside transaction d
 - `[Omnisense-TxParse]` log prefix: When the fallback parser runs, logs each parsed operation (action, path, name, type, scriptName) for easy diagnosis in future test logs.
 - Fallback trigger now logs why it fired (count and whether all-null condition was met).
 
+---
+
+## 46. Tiered Memory & Persistent Semantic Knowledge Graph (Phase 45)
+- **Three-Tiered Memory Architecture**: Upgraded the Omnisense memory model to a high-capacity, tiered system:
+  1. **Long-Term rules (Project DNA)**: Persistent guidelines across sessions, loaded from `.omnisense_dna.md`.
+  2. **Scene Semantic Metadata (Knowledge Graph)**: Structured, live key facts loaded from `.omnisense_knowledge.json`.
+  3. **Working memory (Conversation Context)**: Lean sliding window with bi-directional thought/observation pruning.
+- **Autonomous Heuristic Scene Scanner**: Programmed a C# reflection-free heuristic scene parser in `OmnisenseKnowledgeGraph.cs`. Upon first load or manual request, the scanner automatically traverses all root GameObjects and nested hierarchies to identify, extract, and categorize:
+  - **Waypoints & Patrol Groups**: Grouped dynamically by their parent hierarchies or naming patterns.
+  - **NPCs & Gameplay Scripts**: Discovered based on attached MonoScripts or common names (`NPC`, `Enemy`, `Patrol`), automatically reading component properties for wired waypoints.
+  - **UI Systems (Canvas, Panels, Buttons, Texts)**: Discovered through `Canvas` anchors and child UI toolkit/Image components (compile-safe reflection without compile-time TMPro dependencies).
+  - **Managers & Core Systems**: Discovered based on manager, controller, or director suffixes.
+- **Instant Background Sync (Post-Execution Hooks)**: Hooked our scanner directly into `FinishTurn` in `AIOrchestrator.cs`. Whenever the user approves and flushes a batch of scene modifications from the `PendingActionQueue`, the Knowledge Graph is silently refreshed and re-written in the background to ensure it is always fresh.
+- **Real-Time System Context Injection**: Overhauled `AgentContextManager.cs` to automatically inject the latest compact semantic map outline under `[PROJECT SEMANTIC METADATA]` in all Planner, Manager, and Worker prompts at turn start. This gives the AI permanent "memory" of scene elements without consuming unneeded tool-call execution steps.
+- **Zero-Staging Bookkeeping Tools**: Added `scene/get_semantic_metadata`, `scene/update_semantic_metadata`, and `scene/scan_and_build_graph` to `MCPToolRegistry.cs` and `ToolDispatcher.cs` classified as `AutoApprove`. This allows workers to instantly query or make custom annotations on the metadata database without polluting the user's staged change list.
+
+---
+
+## 47. Persistent External Runtime Logger System (Phase 46)
+- **External Log Storage**: Created a dedicated `OmnisenseLogger` utility that records all runtime actions, context builds, and backend operations in a persistent log file (`Logs/Omnisense.log` in the project root folder) to prevent polluting the assets directory and avoid Unity compilation loop triggers.
+- **Turn Boundary logging**: Implemented `StartNewTurn` to write clear separator banners indicating the timestamp, turn ID, target model, and user prompt at the start of every single execution turn.
+- **DNA and Knowledge Graph tracking**: Log entries explicitly detail when Project DNA files are refreshed, when the Heuristic scene scanner runs, how many elements (waypoints, Canvas components, NPCs) are discovered, and when the metadata maps are injected into the agent context pools.
+- **System-Wide Console Log Auto-Interceptor**: Programmed a custom log handler using Unity's `Application.logMessageReceived` and the `[InitializeOnLoad]` attribute. The logger automatically captures and redirects all plugin-specific console logs (`[Omnisense]`), standard developer warning/error messages, C# exceptions, and compiler errors directly to the external `Logs/Omnisense.log` file, ensuring a centralized, high-fidelity diagnostic record for production environments without changing any existing `Debug.Log` calls.
+
+

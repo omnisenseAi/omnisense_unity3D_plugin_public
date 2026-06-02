@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 
 namespace Omnisense
 {
@@ -19,6 +19,7 @@ Analyze the user's latest request and plan a series of sub-tasks to achieve it.
 3. **SIMPLE TASK RULE (CRITICAL)**: For requests that involve ONE logical action (e.g., 'attach script X to object Y', 'set property Z', 'add component to Building', 'assign waypoints/references to objects', 'wire serialized fields'), you MUST emit exactly **1 sub-task** combining the write + attach + wire into a single atomic step. NEVER split script creation, component attachment, and field wiring into separate tasks -- they MUST be done together in one sub-task by the same worker. Max tasks for any non-trivial request is 3.
    - **WIRING TASKS**: Assigning field values (e.g., ""assign waypoints"", ""set patrol targets"", ""wire references"") to multiple GameObjects is always **1 task**, not multiple. Batch all assignments into one task description.
 4. **BANNED SPLIT PATTERNS**: NEVER generate a separate sub-task for any of: 'verify attachment', 'confirm component exists', 'inspect node after attaching', 'check if waypoints are assigned', 'confirm field wiring'. These verification steps are redundant -- the Deferred Approval Queue handles all confirmation.
+5. **Semantic Memory & Knowledge Graph**: Consult the `[PROJECT SEMANTIC METADATA]` section in your context to see existing waypoint groups, NPCs, Canvas, and custom managers. Coordinate plans that reuse existing waypoint paths rather than creating redundant ones.
 
 Output ONLY a valid JSON object in this exact format:
 {
@@ -200,26 +201,28 @@ Available Tools:
 12. project/get_asset_guid (params: ""path"") - Gets unique GUID of a project asset.
 13. project/inspect_asset (params: ""path"") - Inspects a project asset's or prefab's components and properties.
 14. project/update_dna (params: ""content"") - Updates the project architecture guidelines file (.omnisense_dna.md).
-15. scene/list_all_nodes (params: none) - Returns all root GameObjects currently active in the scene.
-16. scene/instantiate_node (params: ""type"", ""name"", ""parentPath"" (optional)) - Spawns a primitive or prefab in the scene.
-17. scene/modify_node (params: ""path"", ""property"" (""position""|""name""|""add_child""|""add_component""|""remove_component""|""tag""|""layer""), ""value"") - Edits components, children, or basic fields of a scene object or prefab instance.
-18. scene/inspect_node (params: ""path"") - Returns components, children, and properties of a scene object or prefab.
-19. scene/inspect_component (params: ""path"", ""component"") - **CRITICAL: Call this before set_component_property on custom scripts.** Returns all [SerializeField] fields with their EXACT C# field names (including private `_prefixed` fields). You MUST use the exact field name shown � e.g. if it shows `_waypoints`, use `_waypoints` NOT `waypoints`.
-20. scene/set_component_property (params: ""path"", ""component"", ""property"", ""value"") - Sets a serialized component property. For **array/list fields** (e.g., `Transform[]`, `List<GameObject>`), pass a comma-separated list of full scene paths as the value (e.g., `""NPC/Waypoint1, NPC/Waypoint2, NPC/Waypoint3""`) — the system resizes and assigns each element automatically. To clear an array: `""[]""`.
-21. scene/execute_transactions (params: ""operations"") - Batch executes multiple scene modifications in a single turn.
-22. editor/read_console (params: none) - Returns the latest warning/error logs from the Unity Editor console.
-23. scene/list_all_nodes (params: none) - Returns all root GameObjects currently active in the scene.
+15. scene/get_semantic_metadata (params: none) - Returns the JSON-formatted semantic knowledge graph mapping GameObjects to roles (e.g. waypoints, NPCs, UI).
+16. scene/update_semantic_metadata (params: ""path"", ""role"", ""group"" (opt), ""waypoint_group"" (opt), ""script"" (opt), ""value"" (opt)) - Updates or adds a GameObject's custom semantic entry.
+17. scene/scan_and_build_graph (params: none) - Triggers a full scene/asset scan to automatically reconstruct the semantic knowledge graph.
+18. scene/list_all_nodes (params: none) - Returns all root GameObjects currently active in the scene.
+19. scene/instantiate_node (params: ""type"", ""name"", ""parentPath"" (optional)) - Spawns a primitive or prefab in the scene.
+20. scene/modify_node (params: ""path"", ""property"" (""position""|""name""|""add_child""|""add_component""|""remove_component""|""tag""|""layer""), ""value"") - Edits components, children, or basic fields of a scene object or prefab instance.
+21. scene/inspect_node (params: ""path"") - Returns components, children, and properties of a scene object or prefab.
+22. scene/inspect_component (params: ""path"", ""component"") - **CRITICAL: Call this before set_component_property on custom scripts.** Returns all [SerializeField] fields with their EXACT C# field names (including private `_prefixed` fields). You MUST use the exact field name shown  e.g. if it shows `_waypoints`, use `_waypoints` NOT `waypoints`.
+23. scene/set_component_property (params: ""path"", ""component"", ""property"", ""value"") - Sets a serialized component property. For **array/list fields** (e.g., `Transform[]`, `List<GameObject>`), pass a comma-separated list of full scene paths as the value (e.g., `""NPC/Waypoint1, NPC/Waypoint2, NPC/Waypoint3""`) - the system resizes and assigns each element automatically. To clear an array: `""[]""`.
+24. scene/execute_transactions (params: ""operations"") - Batch executes multiple scene modifications in a single turn.
+25. editor/read_console (params: none) - Returns the latest warning/error logs from the Unity Editor console.
 
 Specialized UI Tools:
-24. ui/setup_canvas (params: none) - Configures a standard Canvas and EventSystem with screen size scaling (Reference: 1920x1080). Proactively use this first!
-25. ui/create_panel (params: ""parentPath"", ""name"") - Creates a UI container panel under a parent Canvas or node.
-26. ui/create_text (params: ""parentPath"", ""name"", ""textContent"", ""fontSize"" (int), ""alignment"" (string)) - Creates a TextMeshPro UGUI component.
-27. ui/create_button (params: ""parentPath"", ""name"", ""labelText"") - Creates a beautiful button with a centered text label.
-28. ui/setup_layout_group (params: ""path"", ""groupType"" (""Vertical""|""Horizontal""|""Grid""), ""spacing"" (float), ""paddingCSV"" (e.g. ""10,10,10,10""), ""childAlignment"" (string)) - Configures Vertical, Horizontal, or Grid layout group with Content Size Fitters.
-29. scene/capture_ui_screenshot (params: ""destinationAssetPath"" (optional)) - Captures a high-performance screenshot of the active Unity Game view.
+26. ui/setup_canvas (params: none) - Configures a standard Canvas and EventSystem with screen size scaling (Reference: 1920x1080). Proactively use this first!
+27. ui/create_panel (params: ""parentPath"", ""name"") - Creates a UI container panel under a parent Canvas or node.
+28. ui/create_text (params: ""parentPath"", ""name"", ""textContent"", ""fontSize"" (int), ""alignment"" (string)) - Creates a TextMeshPro UGUI component.
+29. ui/create_button (params: ""parentPath"", ""name"", ""labelText"") - Creates a beautiful button with a centered text label.
+30. ui/setup_layout_group (params: ""path"", ""groupType"" (""Vertical""|""Horizontal""|""Grid""), ""spacing"" (float), ""paddingCSV"" (e.g. ""10,10,10,10""), ""childAlignment"" (string)) - Configures Vertical, Horizontal, or Grid layout group with Content Size Fitters.
+31. scene/capture_ui_screenshot (params: ""destinationAssetPath"" (optional)) - Captures a high-performance screenshot of the active Unity Game view.
 
 Script Attachment Tool (PREFERRED over modify_node/add_component for custom C# scripts):
-30. scene/add_script_component (params: ""path"", ""scriptName"") - Attaches a MonoScript (.cs) asset to a GameObject or Prefab using GUID-based lookup, bypassing namespace reflection issues. If the type isn't compiled yet (e.g., just written this turn), it schedules a [Post-Compile Scheduled] attachment. Always use this for attaching YOUR custom scripts.";
+32. scene/add_script_component (params: ""path"", ""scriptName"") - Attaches a MonoScript (.cs) asset to a GameObject or Prefab using GUID-based lookup, bypassing namespace reflection issues. If the type isn't compiled yet (e.g., just written this turn), it schedules a [Post-Compile Scheduled] attachment. Always use this for attaching YOUR custom scripts.";
 
         /// <summary>
         /// Gets the appropriate worker system prompt for a given routing decision.

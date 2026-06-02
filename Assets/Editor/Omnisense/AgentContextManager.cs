@@ -55,11 +55,21 @@ namespace Omnisense
             {
                 string dnaPath = System.IO.Path.Combine(Application.dataPath, "..", ".omnisense_dna.md");
                 if (System.IO.File.Exists(dnaPath))
+                {
                     _dnaContent = System.IO.File.ReadAllText(dnaPath);
+                    OmnisenseLogger.Log($"Project DNA loaded successfully from '{dnaPath}' ({_dnaContent.Length} chars).", "DNA");
+                }
                 else
+                {
                     _dnaContent = "";
+                    OmnisenseLogger.LogWarning($"Project DNA file not found at '{dnaPath}'. Proceeding with empty DNA.", "DNA");
+                }
             }
-            catch { _dnaContent = ""; }
+            catch (Exception e)
+            {
+                _dnaContent = "";
+                OmnisenseLogger.LogError($"Failed to refresh Project DNA: {e.Message}", "DNA");
+            }
         }
 
         /// <summary>Adds an entry to the persistent scratchpad (environment state).</summary>
@@ -113,10 +123,29 @@ namespace Omnisense
             var ctx = new List<LLMMessage>();
             ctx.Add(Sys(PromptLibrary.PLANNER));
             if (!string.IsNullOrEmpty(_dnaContent))
+            {
                 ctx.Add(Sys($"[PROJECT DNA]\n{_dnaContent}"));
+                OmnisenseLogger.Log($"Injected Project DNA into Planner context ({_dnaContent.Length} chars).", "DNA");
+            }
+            else
+            {
+                OmnisenseLogger.Log("Project DNA is empty. Skipping injection into Planner context.", "DNA");
+            }
+
+            string kgSummary = OmnisenseKnowledgeGraph.GetCompactSummary();
+            if (!string.IsNullOrEmpty(kgSummary) && !kgSummary.StartsWith("Error"))
+            {
+                ctx.Add(Sys($"[PROJECT SEMANTIC METADATA]\nThis represents the current state of GameObjects, Waypoints, NPCs, and UI Canvas in the scene:\n\n{kgSummary}"));
+                OmnisenseLogger.Log($"Injected Knowledge Graph semantic summary into Planner context ({kgSummary.Length} chars).", "KG");
+            }
+            else
+            {
+                OmnisenseLogger.Log("Knowledge Graph summary is empty or errored. Skipping injection into Planner context.", "KG");
+            }
+
             ctx.Add(new LLMMessage { role = "user", content = userRequest });
 
-            Debug.Log($"[Omnisense-Context] Built PLANNER Context: {ctx.Count} messages (Request: {userRequest?.Length ?? 0} chars, DNA: {_dnaContent?.Length ?? 0} chars)");
+            OmnisenseLogger.Log($"Built PLANNER Context: {ctx.Count} messages (Request: {userRequest?.Length ?? 0} chars, DNA: {_dnaContent?.Length ?? 0} chars)", "CONTEXT");
             return ctx;
         }
 
@@ -130,7 +159,26 @@ namespace Omnisense
             var ctx = new List<LLMMessage>();
             ctx.Add(Sys(PromptLibrary.MANAGER));
             if (!string.IsNullOrEmpty(_dnaContent))
+            {
                 ctx.Add(Sys($"[PROJECT DNA]\n{_dnaContent}"));
+                OmnisenseLogger.Log($"Injected Project DNA into Manager context ({_dnaContent.Length} chars).", "DNA");
+            }
+            else
+            {
+                OmnisenseLogger.Log("Project DNA is empty. Skipping injection into Manager context.", "DNA");
+            }
+
+            string kgSummary = OmnisenseKnowledgeGraph.GetCompactSummary();
+            if (!string.IsNullOrEmpty(kgSummary) && !kgSummary.StartsWith("Error"))
+            {
+                ctx.Add(Sys($"[PROJECT SEMANTIC METADATA]\nThis represents the current state of GameObjects, Waypoints, NPCs, and UI Canvas in the scene:\n\n{kgSummary}"));
+                OmnisenseLogger.Log($"Injected Knowledge Graph semantic summary into Manager context ({kgSummary.Length} chars).", "KG");
+            }
+            else
+            {
+                OmnisenseLogger.Log("Knowledge Graph summary is empty or errored. Skipping injection into Manager context.", "KG");
+            }
+
             AddEnvironmentState(ctx);
 
             // User's original request
@@ -158,7 +206,7 @@ namespace Omnisense
             // Manager query
             ctx.Add(new LLMMessage { role = "user", content = managerQuery });
 
-            Debug.Log($"[Omnisense-Context] Built MANAGER Context: {ctx.Count} messages (Active Sub-Task: '{_currentSubTask}', Completed Summaries: {_completedSummaries.Count}, Worker Summary Present: {!string.IsNullOrEmpty(workerSummary)})");
+            OmnisenseLogger.Log($"Built MANAGER Context: {ctx.Count} messages (Active Sub-Task: '{_currentSubTask}', Completed Summaries: {_completedSummaries.Count}, Worker Summary Present: {!string.IsNullOrEmpty(workerSummary)})", "CONTEXT");
             return ctx;
         }
 
@@ -178,7 +226,26 @@ namespace Omnisense
             ctx.Add(Sys(workerPrompt));
 
             if (!string.IsNullOrEmpty(_dnaContent))
+            {
                 ctx.Add(Sys($"[PROJECT DNA]\nThis is the persistent memory of this project. Conform to these architectural rules:\n\n{_dnaContent}"));
+                OmnisenseLogger.Log($"Injected Project DNA into Worker context ({_dnaContent.Length} chars).", "DNA");
+            }
+            else
+            {
+                OmnisenseLogger.Log("Project DNA is empty. Skipping injection into Worker context.", "DNA");
+            }
+
+            string kgSummary = OmnisenseKnowledgeGraph.GetCompactSummary();
+            if (!string.IsNullOrEmpty(kgSummary) && !kgSummary.StartsWith("Error"))
+            {
+                ctx.Add(Sys($"[PROJECT SEMANTIC METADATA]\nThis represents the current state of GameObjects, Waypoints, NPCs, and UI Canvas in the scene:\n\n{kgSummary}"));
+                OmnisenseLogger.Log($"Injected Knowledge Graph semantic summary into Worker context ({kgSummary.Length} chars).", "KG");
+            }
+            else
+            {
+                OmnisenseLogger.Log("Knowledge Graph summary is empty or errored. Skipping injection into Worker context.", "KG");
+            }
+
             AddEnvironmentState(ctx);
 
             // Completed task summaries (so worker knows what was already done)
