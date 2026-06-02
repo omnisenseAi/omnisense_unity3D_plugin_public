@@ -536,4 +536,14 @@ Added display support for `add_script_component` operations inside transaction d
 - **DNA and Knowledge Graph tracking**: Log entries explicitly detail when Project DNA files are refreshed, when the Heuristic scene scanner runs, how many elements (waypoints, Canvas components, NPCs) are discovered, and when the metadata maps are injected into the agent context pools.
 - **System-Wide Console Log Auto-Interceptor**: Programmed a custom log handler using Unity's `Application.logMessageReceived` and the `[InitializeOnLoad]` attribute. The logger automatically captures and redirects all plugin-specific console logs (`[Omnisense]`), standard developer warning/error messages, C# exceptions, and compiler errors directly to the external `Logs/Omnisense.log` file, ensuring a centralized, high-fidelity diagnostic record for production environments without changing any existing `Debug.Log` calls.
 
+---
+
+## 48. Native 3D Modeling Specialist Agent (Phase 47)
+- **Dedicated 3D Modeling Specialist**: Added the `NATIVE_3D_MODELER` prompt variable in `PromptLibrary.cs` defining a specialized modeler agent. This agent specializes in building complex environments, layouts, and hierarchical structures using Unity's native 3D primitives (Cubes, Spheres, Cylinders, Capsules, Planes, Quads).
+- **Multi-Agent Routing Integration**: Overhauled both the `PLANNER` and `MANAGER` system prompts in `PromptLibrary.cs` to identify 3D modeling tasks and route them to `'modeling_agent'`.
+- **Orchestrator Parsing & Token Boost**:
+  - Updated `NormalizeRouting` in `AIOrchestrator.cs` to map `'modeling_agent'` / `'native_3d_agent'` / `'modeling'` routing decisions cleanly.
+  - Configured `SendToLLM` to boost the output completion tokens limit to at least `8192` (matching coding agent behavior) when the modeling agent is active to allow full generation of complex transaction lists.
+- **High-Throughput Batch Mandate**: The modeler is governed by strict rules enforcing the use of `scene/execute_transactions` and local coordinate space maths, preventing sequential trickle modifications and ensuring compound structures (e.g. cars, tables) generate atomicity.
+
 

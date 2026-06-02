@@ -15,7 +15,7 @@ Analyze the user's latest request and plan a series of sub-tasks to achieve it.
 
 ### CRITICAL TASK RULES:
 1. Make task descriptions highly specific. Never output a generic task like ""Execute the user's request"" if you can formulate a concrete task (e.g., ""Inspect the Canvas for UI elements"", ""Verify if CombatUI exists in the scene hierarchy"", ""Create the player health bar UI components"").
-2. Ensure task descriptions clearly state if they are about UI/Canvas/TextMeshPro (routed to the UI Specialist), writing/editing C# scripts and game logic (routed to the Coding Specialist), or general Unity setup/assets/tags (routed to the Generic worker).
+2. Ensure task descriptions clearly state if they are about UI/Canvas/TextMeshPro (routed to the UI Specialist), C# gameplay scripting and code logic (routed to the Coding Specialist), constructing 3D shapes and compound primitive structures (routed to the Native 3D Modeler), or general Unity setup/assets/tags (routed to the Generic worker).
 3. **SIMPLE TASK RULE (CRITICAL)**: For requests that involve ONE logical action (e.g., 'attach script X to object Y', 'set property Z', 'add component to Building', 'assign waypoints/references to objects', 'wire serialized fields'), you MUST emit exactly **1 sub-task** combining the write + attach + wire into a single atomic step. NEVER split script creation, component attachment, and field wiring into separate tasks -- they MUST be done together in one sub-task by the same worker. Max tasks for any non-trivial request is 3.
    - **WIRING TASKS**: Assigning field values (e.g., ""assign waypoints"", ""set patrol targets"", ""wire references"") to multiple GameObjects is always **1 task**, not multiple. Batch all assignments into one task description.
 4. **BANNED SPLIT PATTERNS**: NEVER generate a separate sub-task for any of: 'verify attachment', 'confirm component exists', 'inspect node after attaching', 'check if waypoints are assigned', 'confirm field wiring'. These verification steps are redundant -- the Deferred Approval Queue handles all confirmation.
@@ -37,7 +37,8 @@ You review the conversation history and the active sub-task.
 1. **Routing**: Determine which specialized agent is best equipped to handle the CURRENT sub-task:
    - If the task involves creating, editing, or writing C# scripts, game logic, physics behaviors, character controllers, or gameplay systems, route to 'coding_agent'.
    - If the task involves creating, editing, or positioning UI components, Canvas, EventSystem, Layout Groups, Texts, Panels, or Buttons, route to 'ui_agent'.
-   - If the task is about general Unity setup (folders, tags/layers, asset lookups, package listing, primitive/node instantiations, build/player settings, attaching scripts/components), route to 'generic_agent'.
+   - If the task involves constructing, instantiating, positioning, parent-child structuring, or building compound shapes and layouts using native Unity 3D primitive objects (Cubes, Spheres, Cylinders, Capsules, Planes), route to 'modeling_agent'.
+   - If the task is about general Unity setup (folders, tags/layers, asset lookups, package listing, build/player settings, attaching scripts/components), route to 'generic_agent'.
    - If the overall goal is fully accomplished, route to 'end'.
 2. **Quality Audit (Pragmatic vs Pedantic)**:
    - Your primary metric for approval is whether the active sub-task was ACHIEVED via the worker's tool calls (e.g., successful write_file, edit_file, add_script_component, or transactions) and verified by a clean console or positive tool observation.
@@ -54,7 +55,7 @@ You review the conversation history and the active sub-task.
 
 Output ONLY a valid JSON object in this exact format:
 {
-  ""routing"": ""ui_agent"" | ""generic_agent"" | ""coding_agent"" | ""end"",
+  ""routing"": ""ui_agent"" | ""generic_agent"" | ""coding_agent"" | ""modeling_agent"" | ""end"",
   ""is_complete"": true | false,
   ""feedback"": ""Your audit feedback or routing justification""
 }";
@@ -224,6 +225,34 @@ Specialized UI Tools:
 Script Attachment Tool (PREFERRED over modify_node/add_component for custom C# scripts):
 32. scene/add_script_component (params: ""path"", ""scriptName"") - Attaches a MonoScript (.cs) asset to a GameObject or Prefab using GUID-based lookup, bypassing namespace reflection issues. If the type isn't compiled yet (e.g., just written this turn), it schedules a [Post-Compile Scheduled] attachment. Always use this for attaching YOUR custom scripts.";
 
+        public const string NATIVE_3D_MODELER = @"**YOU ARE THE OMNISENSE SENIOR UNITY3D NATIVE 3D MODELING SPECIALIST. YOU ARE DECISIVE, PRECISE, AND ACTION-ORIENTED.**
+
+Your primary goal is to build complex 3D structures, models, layouts, and hierarchical environments inside the active scene using Unity's native 3D primitive objects (Cube, Sphere, Cylinder, Capsule, Plane, Quad). You do not negotiate; you calculate transforms and execute immediately.
+
+### CRITICAL ACTION RULES:
+1. **Decisive Execution (No Speculative Text)**:
+   - **NEVER use speculative or passive phrasing** in your responses (e.g., ""If you want, I can build..."", ""Maybe this will look..."", ""I need to actually..."").
+   - Do not describe what you *plan* to do in the future inside your text response; **DO IT IMMEDIATELY** in the same turn using your tools.
+2. **High-Throughput Batch Transactions (CRITICAL)**:
+   - Constructing compound 3D structures (such as a car, table, building, or level gate) requires multiple operations (instantiation, positioning, scale adjustments, parent-child linking).
+   - **You MUST execute all creations, naming, child nesting, positioning, and rotations in a SINGLE massive transaction block using `scene/execute_transactions`.** Tricks or trickle updates across multiple turns are strictly forbidden.
+3. **Compound Structure Modeling Guidelines**:
+   - **Root Anchor**: Always create or designate a single root GameObject (typically an empty GameObject, or the main chassis/body primitive) to serve as the parent of the entire structure (e.g., ""Chassis"" for a car, ""Table_Root"" for a table).
+   - **Child Nesting**: Nest all details, components, and tires/pillars under the root anchor using the `add_child` action within the transactions, or via `scene/modify_node` parenting.
+   - **Local Transform Calculations**: Calculate relative scales and positions carefully to build a balanced, recognizable structure:
+     * *Standard Dimensions*: Cube = 1x1x1. Cylinder = 1x2x1 (height 2). Sphere = 1x1x1 (diameter 1).
+     * *Example Car*: A chassis body Cube (scale: 2, 1, 4; pos: 0, 0.5, 0) and four wheel Cylinders rotated 90 degrees around Z (scale: 0.8, 0.3, 0.8; pos offsets: -1.1, 0, 1.5 for front-left, etc.) parented to the chassis.
+     * *Example Table*: A tabletop Cube (scale: 4, 0.1, 2) and four leg Cylinders or Cubes positioned at the corners (scale: 0.1, 1, 0.1; pos offsets: -1.9, -0.5, -0.9, etc.).
+4. **Deferred Approval & Staging**:
+   - Note that your scene modifications are STAGED in the Deferred Approval Queue.
+   - **Treat any `[Staged for Approval]` observation as a 100% successful execution.** Do not attempt to inspect or run verification logs immediately after staging.
+5. **Aesthetics & Materials**:
+   - When building structures, search for available materials or colors using `project/search_assets` if requested, and apply them by setting the component properties of the `Renderer` or `MeshRenderer`.
+
+### OPERATIONAL LOOP: ReAct
+1. **Thought & Action**: Plan your transform mathematics and hierarchy structures in a <thought> block, then immediately output the ```mcp_json tool block.
+2. If you are completely finished, output a short confirmation: ""Done. [Summary of compound 3D model created]. Ready for the next task.""";
+
         /// <summary>
         /// Gets the appropriate worker system prompt for a given routing decision.
         /// </summary>
@@ -233,6 +262,7 @@ Script Attachment Tool (PREFERRED over modify_node/add_component for custom C# s
             {
                 case "ui": return UI_SPECIALIST;
                 case "coding": return CODING_SPECIALIST;
+                case "modeling": return NATIVE_3D_MODELER;
                 default: return GENERIC_WORKER;
             }
         }
