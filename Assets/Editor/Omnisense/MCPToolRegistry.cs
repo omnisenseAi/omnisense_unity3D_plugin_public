@@ -360,10 +360,19 @@ namespace Omnisense
                     newNode.name = string.IsNullOrEmpty(name) ? type : name;
                     
                     // Handle parenting if requested
+                    string parentWarning = null;
                     if (!string.IsNullOrEmpty(parentPath))
                     {
                         GameObject parent = FindGameObjectDeep(parentPath);
-                        if (parent != null) newNode.transform.SetParent(parent.transform);
+                        if (parent != null)
+                        {
+                            newNode.transform.SetParent(parent.transform);
+                        }
+                        else
+                        {
+                            parentWarning = $"parentPath '{parentPath}' not found. Created '{newNode.name}' as root.";
+                            Debug.LogWarning($"[Omnisense][InstantiateNode] {parentWarning}");
+                        }
                     }
 
                     Undo.RegisterCreatedObjectUndo(newNode, "Instantiate via Omnisense");
@@ -372,7 +381,8 @@ namespace Omnisense
                     return new ToolResult 
                     { 
                         success = true, 
-                        observation = $"Successfully instantiated {newNode.name} in the scene." 
+                        observation = $"Successfully instantiated {newNode.name} in the scene." +
+                                      (parentWarning != null ? $" WARNING: {parentWarning}" : "")
                     };
                 }
 
@@ -1142,6 +1152,59 @@ namespace Omnisense
                 return new ToolResult { success = false, error = "Operations list is empty." };
             }
 
+            // Pre-process operations to remove redundant/duplicate child creations.
+            // Specifically, if we have a modify_node (add_child = X under Y) AND an instantiate_node (name = X under Y),
+            // the modify_node operation is redundant and will create a duplicate empty GameObject. We skip it.
+            var indicesToRemove = new HashSet<int>();
+            for (int i = 0; i < operations.Count; i++)
+            {
+                var opA = operations[i];
+                if (opA == null) continue;
+                string actionA = !string.IsNullOrEmpty(opA.action) ? opA.action.ToLower() : (!string.IsNullOrEmpty(opA.tool) ? opA.tool.ToLower() : "");
+                
+                if (actionA == "modify_node" || actionA == "scene/modify_node")
+                {
+                    if (!string.IsNullOrEmpty(opA.property) && opA.property.ToLower() == "add_child" && !string.IsNullOrEmpty(opA.value))
+                    {
+                        string childName = opA.value.Replace("GameObject:", "").Trim();
+                        string parentA = (opA.path ?? "").Replace('\\', '/').Trim('/');
+
+                        // Look for a corresponding instantiate_node in the same transaction list
+                        for (int j = 0; j < operations.Count; j++)
+                        {
+                            if (i == j) continue;
+                            var opB = operations[j];
+                            if (opB == null) continue;
+                            string actionB = !string.IsNullOrEmpty(opB.action) ? opB.action.ToLower() : (!string.IsNullOrEmpty(opB.tool) ? opB.tool.ToLower() : "");
+
+                            if (actionB == "instantiate_node" || actionB == "scene/instantiate_node")
+                            {
+                                string parentB = (opB.parentPath ?? opB.parent ?? opB.path ?? "").Replace('\\', '/').Trim('/');
+                                if (opB.name == childName && parentA.Equals(parentB, StringComparison.OrdinalIgnoreCase))
+                                {
+                                    indicesToRemove.Add(i);
+                                    Debug.Log($"[Omnisense-TxDeduplicate] Skipping redundant modify_node/add_child for '{childName}' under '{parentA}' because it is also instantiated via instantiate_node.");
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (indicesToRemove.Count > 0)
+            {
+                var filtered = new List<TransactionOperation>();
+                for (int i = 0; i < operations.Count; i++)
+                {
+                    if (!indicesToRemove.Contains(i))
+                    {
+                        filtered.Add(operations[i]);
+                    }
+                }
+                operations = filtered;
+            }
+
             List<string> results = new List<string>();
             bool overallSuccess = true;
 
@@ -1162,7 +1225,7 @@ namespace Omnisense
                 {
                     if (actionName == "instantiate_node" || actionName == "scene/instantiate_node")
                     {
-                        subResult = InstantiateNode(op.type, op.name, op.parent ?? op.path);
+                        subResult = InstantiateNode(op.type, op.name, op.parentPath ?? op.parent ?? op.path);
                     }
                     else if (actionName == "modify_node" || actionName == "scene/modify_node")
                     {
@@ -1182,7 +1245,7 @@ namespace Omnisense
                     }
                     else if (actionName == "add_child" || actionName == "scene/add_child")
                     {
-                        string parentPath = op.parent ?? op.path;
+                        string parentPath = op.parentPath ?? op.parent ?? op.path;
                         string childName = op.name;
                         
                         subResult = InstantiateNode("GameObject", childName, parentPath);

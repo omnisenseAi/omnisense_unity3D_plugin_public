@@ -151,9 +151,9 @@ namespace Omnisense
 
         /// <summary>
         /// Builds context for the Manager: sees the user request, completed summaries,
-        /// current sub-task, and a condensed worker summary — but NOT raw tool observations.
+        /// current sub-task, staged action ledger, and a condensed worker summary — but NOT raw tool observations.
         /// </summary>
-        public List<LLMMessage> BuildManagerContext(string managerQuery)
+        public List<LLMMessage> BuildManagerContext(string managerQuery, string stagedLedger = null)
         {
             RefreshDNA();
             var ctx = new List<LLMMessage>();
@@ -194,6 +194,15 @@ namespace Omnisense
                 ctx.Add(Sys(sb.ToString().TrimEnd()));
             }
 
+            // ── STAGED ACTIONS LEDGER (for Ledger-Aware Pre-Routing Check) ──
+            // Lets the Manager see what was already staged so it can auto-approve
+            // redundant sub-tasks (e.g. "create child Entrance" when it was already staged).
+            if (!string.IsNullOrEmpty(stagedLedger))
+            {
+                ctx.Add(Sys(stagedLedger));
+                OmnisenseLogger.Log($"Injected Staged Actions Ledger into Manager context ({stagedLedger.Length} chars).", "CONTEXT");
+            }
+
             // Current sub-task
             if (!string.IsNullOrEmpty(_currentSubTask))
                 ctx.Add(new LLMMessage { role = "user", content = $"[Active Sub-Task]: {_currentSubTask}" });
@@ -206,9 +215,10 @@ namespace Omnisense
             // Manager query
             ctx.Add(new LLMMessage { role = "user", content = managerQuery });
 
-            OmnisenseLogger.Log($"Built MANAGER Context: {ctx.Count} messages (Active Sub-Task: '{_currentSubTask}', Completed Summaries: {_completedSummaries.Count}, Worker Summary Present: {!string.IsNullOrEmpty(workerSummary)})", "CONTEXT");
+            OmnisenseLogger.Log($"Built MANAGER Context: {ctx.Count} messages (Active Sub-Task: '{_currentSubTask}', Completed Summaries: {_completedSummaries.Count}, Worker Summary Present: {!string.IsNullOrEmpty(workerSummary)}, Ledger: {(string.IsNullOrEmpty(stagedLedger) ? "none" : $"{stagedLedger.Length} chars")})", "CONTEXT");
             return ctx;
         }
+
 
         /// <summary>
         /// Builds context for a Worker: sees the user request, current sub-task,

@@ -89,7 +89,7 @@ namespace Omnisense
                 case "project/inspect_asset":
                     return MCPToolRegistry.InspectAsset(p.path);
                 case "scene/instantiate_node":
-                    return MCPToolRegistry.InstantiateNode(p.type, p.name);
+                    return MCPToolRegistry.InstantiateNode(p.type, p.name, p.parentPath);
                 case "scene/modify_node":
                     return MCPToolRegistry.ModifyNode(p.path, p.property, p.value);
                 case "scene/inspect_node":
@@ -278,7 +278,7 @@ namespace Omnisense
                 case "project/write_file":
                     return $"<color=#00FF00>+ Write File:</color> {p.path}";
                 case "scene/instantiate_node":
-                    return $"<color=#00FF00>+ Instantiate:</color> {p.type} as '{p.name}'";
+                    return $"<color=#00FF00>+ Instantiate:</color> {p.type} as '{p.name}'" + (string.IsNullOrEmpty(p.parentPath) ? "" : $" under parent '{p.parentPath}'");
                 case "scene/modify_node":
                 {
                     if (p.property == "add_component") return $"<color=#00FF00>+ Add Component:</color> {p.value} on {p.path}";
@@ -300,7 +300,10 @@ namespace Omnisense
                     {
                         string act = (!string.IsNullOrEmpty(op.action) ? op.action : op.tool)?.ToLower() ?? "";
                         if (act == "instantiate_node" || act == "scene/instantiate_node")
-                            list.Add($"  + Instantiate: {op.type} as '{op.name}'");
+                        {
+                            string parentP = op.parentPath ?? op.parent ?? op.path;
+                            list.Add($"  + Instantiate: {op.type} as '{op.name}'" + (string.IsNullOrEmpty(parentP) ? "" : $" under parent '{parentP}'"));
+                        }
                         else if (act == "modify_node" || act == "scene/modify_node")
                             list.Add($"  ~ Modify Node '{op.path}': set {op.property} = '{op.value}'");
                         else if (act == "add_component" || act == "addcomponent" || act == "scene/add_component")

@@ -332,8 +332,9 @@ namespace Omnisense
             _routingDecision = "manager";
             string managerRoutePrompt = $"Review the current task: '{_currentTask}'. Which specialized agent is best suited to start this task? Route to 'ui_agent', 'coding_agent', 'modeling_agent', or 'generic_agent'. Output ONLY valid JSON: {{\"routing\": \"ui_agent\" | \"coding_agent\" | \"modeling_agent\" | \"generic_agent\", \"is_complete\": false, \"feedback\": \"Justification for routing\"}}";
 
-            // W4: Build isolated manager context (no raw tool history)
-            var managerContext = _context.BuildManagerContext(managerRoutePrompt);
+            // W4: Build isolated manager context (no raw tool history); include ledger for pre-routing check
+            string routeLedger = _approvalQueue.Count > 0 ? _approvalQueue.GetStagedObjectLedger() : null;
+            var managerContext = _context.BuildManagerContext(managerRoutePrompt, routeLedger);
             SendToLLM(model, managerContext, onComplete);
         }
 
@@ -365,7 +366,7 @@ namespace Omnisense
             }
             else if (_routingDecision == "manager")
             {
-                // Manager audit: build isolated manager context
+                // Manager audit: build isolated manager context with ledger for anti-duplicate check
                 string managerAuditPrompt = $"MANAGER AUDIT: Review the chat history and evaluate the Worker's execution of the CURRENT SUB-TASK: '{_currentTask}'. Did the worker successfully complete this specific sub-task? Do NOT evaluate against the entire user request, ONLY evaluate if this specific sub-task is done.";
                 if (_consecutiveManagerRejections > 0)
                 {
@@ -374,7 +375,8 @@ namespace Omnisense
                     managerAuditPrompt += "\n- If you must reject again, your 'feedback' MUST guide the worker with a clear, alternative strategy.";
                 }
                 managerAuditPrompt += "\n\nOutput ONLY valid JSON in this exact format:\n{\"is_complete\": true/false, \"feedback\": \"...\"}";
-                activeContext = _context.BuildManagerContext(managerAuditPrompt);
+                string auditLedger = _approvalQueue.Count > 0 ? _approvalQueue.GetStagedObjectLedger() : null;
+                activeContext = _context.BuildManagerContext(managerAuditPrompt, auditLedger);
             }
             else
             {
