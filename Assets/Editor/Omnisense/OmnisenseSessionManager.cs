@@ -27,7 +27,19 @@ namespace Omnisense
 
     public static class OmnisenseSessionManager
     {
-        private static string HistoryPath => Path.Combine(Directory.GetCurrentDirectory(), "UserSettings", "OmnisenseHistory");
+        private static readonly string HistoryPath;
+
+        static OmnisenseSessionManager()
+        {
+            try
+            {
+                HistoryPath = Path.Combine(Application.dataPath, "..", "UserSettings", "OmnisenseHistory");
+            }
+            catch (Exception)
+            {
+                HistoryPath = Path.Combine(Directory.GetCurrentDirectory(), "UserSettings", "OmnisenseHistory");
+            }
+        }
 
         public static void SaveSession(ChatSession session)
         {

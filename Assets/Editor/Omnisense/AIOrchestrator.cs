@@ -380,7 +380,9 @@ namespace Omnisense
             {
                 // Worker context (ui, coding, generic)
                 _context.PruneWorkerHistory();
-                activeContext = _context.BuildWorkerContext(_routingDecision, _consecutiveManagerRejections, _lastManagerFeedback);
+                // Build staged ledger so this worker knows what previous sub-tasks already staged
+                string stagedLedger = _approvalQueue.Count > 0 ? _approvalQueue.GetStagedObjectLedger() : null;
+                activeContext = _context.BuildWorkerContext(_routingDecision, _consecutiveManagerRejections, _lastManagerFeedback, stagedLedger);
             }
 
             Debug.Log($"[Omnisense-Diagnostics] ExecuteRequest invoked. Context size: {activeContext.Count} messages.");

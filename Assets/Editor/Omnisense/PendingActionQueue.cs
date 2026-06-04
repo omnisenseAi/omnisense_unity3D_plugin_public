@@ -121,6 +121,31 @@ namespace Omnisense
         }
 
         /// <summary>
+        /// Returns a compact text ledger of what objects, scripts, and components have been staged
+        /// for creation so that subsequent sub-task workers do not re-create already-staged objects.
+        /// </summary>
+        public string GetStagedObjectLedger()
+        {
+            if (_queue.Count == 0) return null;
+
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine("[STAGED ACTIONS LEDGER]");
+            sb.AppendLine("The following operations have already been staged for approval and ARE pending execution.");
+            sb.AppendLine("DO NOT re-create any GameObjects listed below — they already exist in the staging queue.");
+            sb.AppendLine();
+
+            foreach (var action in _queue)
+            {
+                // Use the human-readable diff summary that is already generated
+                if (!string.IsNullOrEmpty(action.DiffSummary))
+                    sb.AppendLine($"  [{action.Timestamp}] {action.DiffSummary.Trim()}");
+            }
+
+            return sb.ToString().TrimEnd();
+        }
+
+
+        /// <summary>
         /// Raise a blocking approval request for dangerous operations.
         /// The caller must await the callback before continuing execution.
         /// </summary>

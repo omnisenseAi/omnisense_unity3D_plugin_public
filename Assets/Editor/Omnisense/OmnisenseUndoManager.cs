@@ -29,8 +29,21 @@ namespace Omnisense
 
     public static class OmnisenseUndoManager
     {
-        private static string BackupDir => Path.Combine(Directory.GetCurrentDirectory(), "UserSettings", "OmnisenseUndo");
-        private static string DbPath => Path.Combine(BackupDir, "undo_db.json");
+        private static readonly string BackupDir;
+        private static readonly string DbPath;
+
+        static OmnisenseUndoManager()
+        {
+            try
+            {
+                BackupDir = Path.Combine(Application.dataPath, "..", "UserSettings", "OmnisenseUndo");
+            }
+            catch (Exception)
+            {
+                BackupDir = Path.Combine(Directory.GetCurrentDirectory(), "UserSettings", "OmnisenseUndo");
+            }
+            DbPath = Path.Combine(BackupDir, "undo_db.json");
+        }
 
         public static string CurrentTurnId { get; private set; } = "";
 

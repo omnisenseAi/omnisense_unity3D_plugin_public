@@ -214,7 +214,7 @@ namespace Omnisense
         /// Builds context for a Worker: sees the user request, current sub-task,
         /// and its OWN tool chain — but NOT manager routing queries or other workers' history.
         /// </summary>
-        public List<LLMMessage> BuildWorkerContext(string routingDecision, int rejections, string lastFeedback)
+        public List<LLMMessage> BuildWorkerContext(string routingDecision, int rejections, string lastFeedback, string stagedLedger = null)
         {
             RefreshDNA();
             var ctx = new List<LLMMessage>();
@@ -258,6 +258,15 @@ namespace Omnisense
                 ctx.Add(Sys(sb.ToString().TrimEnd()));
             }
 
+            // ── STAGED ACTIONS LEDGER (anti-duplicate guard) ──
+            // Tells the worker what the PREVIOUS sub-task already staged so it
+            // doesn't re-create the same objects.
+            if (!string.IsNullOrEmpty(stagedLedger))
+            {
+                ctx.Add(Sys(stagedLedger));
+                OmnisenseLogger.Log($"Injected Staged Actions Ledger into Worker context ({stagedLedger.Length} chars).", "CONTEXT");
+            }
+
             // User's original request
             ctx.Add(new LLMMessage { role = "user", content = _userRequest });
 
@@ -269,7 +278,7 @@ namespace Omnisense
             foreach (var msg in _workerHistory)
                 ctx.Add(msg);
 
-            Debug.Log($"[Omnisense-Context] Built WORKER Context ({routingDecision}): {ctx.Count} messages (Worker History: {_workerHistory.Count} messages, Rejections: {rejections}, Sub-Task: '{_currentSubTask}')");
+            Debug.Log($"[Omnisense-Context] Built WORKER Context ({routingDecision}): {ctx.Count} messages (Worker History: {_workerHistory.Count} messages, Rejections: {rejections}, Sub-Task: '{_currentSubTask}', Ledger: {(string.IsNullOrEmpty(stagedLedger) ? "none" : $"{stagedLedger.Length} chars")})");
             return ctx;
         }
 

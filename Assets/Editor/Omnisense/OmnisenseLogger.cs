@@ -8,10 +8,19 @@ namespace Omnisense
     [InitializeOnLoad]
     public static class OmnisenseLogger
     {
-        private static string LogPath => Path.Combine(Directory.GetCurrentDirectory(), "Logs", "Omnisense.log");
+        private static readonly string LogPath;
 
         static OmnisenseLogger()
         {
+            try
+            {
+                LogPath = Path.Combine(Application.dataPath, "..", "Logs", "Omnisense.log");
+            }
+            catch (Exception)
+            {
+                LogPath = Path.Combine(Directory.GetCurrentDirectory(), "Logs", "Omnisense.log");
+            }
+
             // Subscribe to Unity log event, preventing duplicate registrations
             Application.logMessageReceived -= HandleUnityLog;
             Application.logMessageReceived += HandleUnityLog;
