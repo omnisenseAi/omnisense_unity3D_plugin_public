@@ -330,7 +330,7 @@ namespace Omnisense
 
             // Ask Manager to route this sub-task
             _routingDecision = "manager";
-            string managerRoutePrompt = $"Review the current task: '{_currentTask}'. Which specialized agent is best suited to start this task? Route to 'ui_agent', 'coding_agent', 'modeling_agent', or 'generic_agent'. Output ONLY valid JSON: {{\"routing\": \"ui_agent\" | \"coding_agent\" | \"modeling_agent\" | \"generic_agent\", \"is_complete\": false, \"feedback\": \"Justification for routing\"}}";
+            string managerRoutePrompt = $"Review the current task: '{_currentTask}'. Which specialized agent is best suited to start this task? Route to 'ui_agent', 'coding_agent', 'modeling_agent', 'modeling_2d_agent', or 'generic_agent'. Output ONLY valid JSON: {{\"routing\": \"ui_agent\" | \"coding_agent\" | \"modeling_agent\" | \"modeling_2d_agent\" | \"generic_agent\", \"is_complete\": false, \"feedback\": \"Justification for routing\"}}";
 
             // W4: Build isolated manager context (no raw tool history); include ledger for pre-routing check
             string routeLedger = _approvalQueue.Count > 0 ? _approvalQueue.GetStagedObjectLedger() : null;
@@ -345,6 +345,8 @@ namespace Omnisense
                 Debug.Log($"[Omnisense-MultiAgent] C# Gameplay Coding Specialist Agent starting execution step for sub-task: '{_currentTask}' (Step: {_stepCount + 1}/{MAX_STEPS})");
             if (_routingDecision == "modeling")
                 Debug.Log($"[Omnisense-MultiAgent] Native 3D Modeling Specialist Agent starting execution step for sub-task: '{_currentTask}' (Step: {_stepCount + 1}/{MAX_STEPS})");
+            if (_routingDecision == "modeling_2d")
+                Debug.Log($"[Omnisense-MultiAgent] Native 2D Modeling Specialist Agent starting execution step for sub-task: '{_currentTask}' (Step: {_stepCount + 1}/{MAX_STEPS})");
 
             _stepCount++;
             if (_stepCount > MAX_STEPS)
@@ -422,10 +424,10 @@ namespace Omnisense
 
             string apiKey = GetApiKey(model);
             int maxTokens = GetMaxTokens(model);
-            if (_routingDecision == "coding" || _routingDecision == "modeling")
+            if (_routingDecision == "coding" || _routingDecision == "modeling" || _routingDecision == "modeling_2d")
             {
                 maxTokens = Math.Max(maxTokens * 2, 8192);
-                Debug.Log($"[Omnisense-MultiAgent] Coding/Modeling Agent active. Output token limit boosted to: {maxTokens}");
+                Debug.Log($"[Omnisense-MultiAgent] Coding/Modeling/2D Modeling Agent active. Output token limit boosted to: {maxTokens}");
             }
 
             _activeRequest = provider.BuildRequest(apiKey, model, context, maxTokens);
@@ -668,6 +670,8 @@ namespace Omnisense
                 string agentName = "Generic Architect";
                 if (_routingDecision == "ui") agentName = "UI Specialist";
                 else if (_routingDecision == "coding") agentName = "Unity3D Coding/Scripting Specialist";
+                else if (_routingDecision == "modeling") agentName = "Native 3D Modeling Specialist";
+                else if (_routingDecision == "modeling_2d") agentName = "Native 2D Modeling Specialist";
 
                 string routeMsg = $"<b>[Manager] Task routed to specialized {agentName} Agent.</b>";
                 _currentTurnTrace.AppendLine(routeMsg);
@@ -712,6 +716,7 @@ namespace Omnisense
             if (routing == "ui_agent" || routing == "ui") return "ui";
             if (routing == "coding_agent" || routing == "coding") return "coding";
             if (routing == "modeling_agent" || routing == "modeling" || routing == "native_3d_agent") return "modeling";
+            if (routing == "modeling_2d_agent" || routing == "modeling_2d" || routing == "2d_modeling_agent" || routing == "native_2d_agent") return "modeling_2d";
             return "generic";
         }
 

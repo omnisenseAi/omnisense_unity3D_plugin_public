@@ -546,4 +546,17 @@ Added display support for `add_script_component` operations inside transaction d
   - Configured `SendToLLM` to boost the output completion tokens limit to at least `8192` (matching coding agent behavior) when the modeling agent is active to allow full generation of complex transaction lists.
 - **High-Throughput Batch Mandate**: The modeler is governed by strict rules enforcing the use of `scene/execute_transactions` and local coordinate space maths, preventing sequential trickle modifications and ensuring compound structures (e.g. cars, tables) generate atomicity.
 
+---
+
+## 49. Programmatic 2D/3D Context Detection & Native 2D Modeler Specialist Agent (Phase 50)
+- **Programmatic Default Behavior Mode Check**: Programmed `AgentContextManager.cs` to dynamically query Unity Editor's `EditorSettings.defaultBehaviorMode` API.
+- **Default DNA Initialization**: When the `.omnisense_dna.md` file is missing, the system automatically initializes a default Project DNA file containing the detected behavior mode (2D or 3D) and soft guidelines for the agents.
+- **Dedicated 2D Modeler Specialist**: Added `NATIVE_2D_MODELER` in `PromptLibrary.cs` defining a specialized 2D modeler agent. This agent specializes in building complex compound 2D visual layouts, layered overlapping sprite structures (using `Renderer.sortingOrder`), and 2D physics setups (colliders and rigidbodies).
+- **Softened Complexity-Based Routing**: Overhauled the `MANAGER`'s routing rules to route simple instantiations (2D or 3D) to `generic_agent` based on complexity rather than mode, reserving `modeling_agent` and `modeling_2d_agent` strictly for complex compound designs.
+- **Context-Driven Creation Rules**: Hardened both the 2D and 3D modeler prompts to evaluate the user request context, scripts, and components dynamically rather than being restricted to a single global project mode.
+- **Orchestrator Integration & Token Boost**:
+  - Integrated `modeling_2d_agent` support into the `NormalizeRouting`, UI display mapping, and logging in `AIOrchestrator.cs`.
+  - Configured output token boosting for the 2D Modeler (up to 8,192 tokens) to support heavy layout payload generation.
+
+
 

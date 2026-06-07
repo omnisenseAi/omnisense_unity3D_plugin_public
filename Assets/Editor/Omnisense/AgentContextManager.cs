@@ -61,8 +61,29 @@ namespace Omnisense
                 }
                 else
                 {
-                    _dnaContent = "";
-                    OmnisenseLogger.LogWarning($"Project DNA file not found at '{dnaPath}'. Proceeding with empty DNA.", "DNA");
+                    string defaultDNA = @"# Project DNA
+This file serves as persistent architectural guidelines and project profile context for the AI agents working on this project.
+
+## Project Dimension Profile
+- Primary gameplay dimension: **2D** (top-down / side-scroller / flat layout)
+- Common patterns used: `SpriteRenderer`, `PolygonCollider2D`, `BoxCollider2D`, `Rigidbody2D`, 2D physics, UI Canvas heavy, `Empty` GameObjects for simple parent containers
+- 3D primitives (like `Cube`, `Sphere`, `Cylinder`, etc.) should NOT be used for 2D objects/sprites. Use `type: ""Empty""` instead.
+
+## Architectural Notes
+- Place gameplay logic scripts under specialized script folders.
+- Follow clean coding practices, avoid duplicate creation of nodes, and always use namespace-safe tools.";
+
+                    try
+                    {
+                        System.IO.File.WriteAllText(dnaPath, defaultDNA);
+                        _dnaContent = defaultDNA;
+                        OmnisenseLogger.Log($"Default Project DNA file initialized at '{dnaPath}'.", "DNA");
+                    }
+                    catch (Exception writeErr)
+                    {
+                        _dnaContent = "";
+                        OmnisenseLogger.LogError($"Failed to initialize default Project DNA file: {writeErr.Message}", "DNA");
+                    }
                 }
             }
             catch (Exception e)
