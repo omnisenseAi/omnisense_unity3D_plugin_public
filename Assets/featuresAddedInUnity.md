@@ -558,5 +558,23 @@ Added display support for `add_script_component` operations inside transaction d
   - Integrated `modeling_2d_agent` support into the `NormalizeRouting`, UI display mapping, and logging in `AIOrchestrator.cs`.
   - Configured output token boosting for the 2D Modeler (up to 8,192 tokens) to support heavy layout payload generation.
 
+---
+
+## 50. Simplified Image Generation Feature (Phase 51)
+- **User-Triggered Icon Activation**: Added a dedicated image generation button (`🎨`) to `OmnisenseWindow.uxml` next to the attachment icon, styled with modern hover highlights in `OmnisenseWindow.uss`.
+- **Premium Popup Interface (`ImageGenerationPopup.cs`)**: Implemented a floating Unity EditorWindow popup that features:
+  - Prompt description input (multi-line).
+  - Style Preset dropdown selector (Pixel Art, 2D Platformer, Stylized, etc.).
+  - AI Provider selector (OpenAI DALL-E, Google Imagen).
+  - Custom Width and Height resolution inputs.
+  - Persistent Save Location text field with an interactive directory browse (`...`) button.
+  - Live progress feedback label and state-based field lockouts during processing.
+- **Automatic Style Append Engine**: Configured style presets to map directly to prompt suffixes (e.g., `, pixel art style, 2d game sprite, clean background`) to guide the model generator towards specific game art styles.
+- **PlayerPrefs Storage Persistence**: Saves the target storage directory to Unity's `PlayerPrefs` dynamically on value changes, restoring it automatically on popup initialization.
+- **Multi-Provider Web Handlers**:
+  - **OpenAI DALL-E / Image**: Builds a POST request to OpenAI's images endpoint, dynamically selecting `gpt-image-1` or `dall-e-2` depending on resolution, and supports parsing either direct base64 bytes (`b64_json`) or external URLs (`url`) to load the image.
+  - **Google Imagen**: Builds a POST request to Google's Imagen endpoint, dynamically mapping resolution inputs to optimal API aspect ratios (`1:1`, `4:3`, `16:9`, `3:4`, `9:16`), and directly parses base64-encoded image bytes from the JSON response.
+- **Asset Database Integration**: Verifies and creates the target storage folder if missing, writes unique timestamped `.png` files to disk, and executes immediate import via `AssetDatabase.ImportAsset` and `AssetDatabase.Refresh`.
+
 
 

@@ -228,6 +228,17 @@
     color: white;
 }
 
+.image-gen-button {
+    background-color: transparent;
+    border-width: 0;
+    color: #adb5bd;
+    font-size: 16px;
+    padding: 5px 10px;
+}
+.image-gen-button:hover {
+    color: white;
+}
+
 .context-chips-container {
     flex-direction: row;
     flex-wrap: wrap;

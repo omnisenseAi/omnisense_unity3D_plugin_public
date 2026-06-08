@@ -47,6 +47,7 @@
                     </ui:VisualElement>
                     <ui:VisualElement class="input-footer">
                         <ui:Button name="btn-attach" text="📎" class="attach-button" tooltip="Attach file to context" />
+                        <ui:Button name="btn-image-gen" text="🎨" class="image-gen-button" tooltip="Generate AI Image" />
                         <ui:VisualElement class="spacer" />
                         <ui:Button name="btn-stop" text="⏹" class="stop-button-circular hidden" tooltip="Stop AI execution" />
                         <ui:Button name="send-button" text="↑" class="send-button-circular" />

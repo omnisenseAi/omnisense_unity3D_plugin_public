@@ -116,6 +116,9 @@ namespace Omnisense
             var btnAttach = root.Q<Button>("btn-attach");
             if (btnAttach != null) btnAttach.clicked += OnAttachClicked;
 
+            var btnImageGen = root.Q<Button>("btn-image-gen");
+            if (btnImageGen != null) btnImageGen.clicked += () => ImageGenerationPopup.Open();
+
             root.Q<Button>("send-button").clicked += SendMessage;
             root.Q<Button>("btn-history").clicked += ShowHistory;
             root.Q<Button>("btn-undo").clicked += () => OmnisenseUndoManager.PerformUndo();
