@@ -605,5 +605,17 @@ Added display support for `add_script_component` operations inside transaction d
   - Connected a convenience link button (`✂ Open in Image Editor`) in [ImageGenerationPopup.cs](file:///e:/OmniSense_Unity3D_Plugin/OmniSense_Unity3D_Plugin/Assets/Editor/Omnisense/ImageGenerationPopup.cs) that displays upon successful generation.
   - Clicking this shortcut directly opens the editor window and loads the path of the generated asset (without automatic AI intervention).
 
+---
+
+## 52. Session Chat History Context Memory (Phase 53)
+- **Persistent Dialog History**: Added `_chatHistory` to `AgentContextManager.cs` to store a list of previous chat messages (user prompt and assistant response dialogue turns) across turns within a chat session.
+- **Session Sync on Every Turn**: Overhauled `AIOrchestrator.ProcessPrompt` to load the active session from disk and synchronize the context manager's dialogue history at the start of every prompt turn.
+- **Context Saturation Safeguards (Sliding Window & Truncation)**:
+  - Constrained the history storage to a sliding window of the last 12 messages.
+  - Truncates individual message content exceeding 2,000 characters to prevent context window bloat and "lost in the middle" memory exhaustion.
+- **Trace & Thought Stripping Engine**: Added a `CleanHistoryMessageContent` helper to filter out thoughts (`<thought>...</thought>`), tool traces (`[Observation]...`), and context chips (`[Context: ...]`), storing only the high-level dialogue summaries and completely preventing the full technical execution trace from bloating context memory.
+- **Isolated Context Injections**: Integrated dialogue history injection into the Planner (`BuildPlannerContext`), Manager (`BuildManagerContext`), and Worker (`BuildWorkerContext`) context builders directly before the active user request, allowing all agents to fully remember past conversation turns without contaminating the active sub-task's raw tools and ledger state.
+
+
 
 

@@ -225,7 +225,18 @@ namespace Omnisense
                 Debug.Log("[Omnisense-DomainReload] Assemblies LOCKED. Domain reloads suppressed for this turn.");
             }
 
-            // W4: Set user request in the isolated context manager
+            // Sync context with the saved session history to load prior dialogue turns
+            string lastSessionId = EditorPrefs.GetString("Omnisense_LastSessionId", "");
+            if (!string.IsNullOrEmpty(lastSessionId))
+            {
+                var currentSession = OmnisenseSessionManager.GetSessionById(lastSessionId);
+                if (currentSession != null)
+                {
+                    _context.SyncWithSession(currentSession);
+                }
+            }
+
+            // Ensure the active prompt matches the user request
             _context.SetUserRequest(prompt);
             _context.Save();
 

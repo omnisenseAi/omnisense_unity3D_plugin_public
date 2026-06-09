@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 using UnityEditor;
 using UnityEngine;
 
@@ -34,6 +35,9 @@ namespace Omnisense
 
         // ── Worker-isolated history (reset per sub-task) ──
         private List<LLMMessage> _workerHistory = new List<LLMMessage>();
+
+        // ── Chat dialogue history (sliding window of prior turns) ──
+        private List<LLMMessage> _chatHistory = new List<LLMMessage>();
 
         // ── Persistence keys ──
         private const string PREFS_CONTEXT = "Omnisense_AgentContext";
@@ -164,6 +168,15 @@ This file serves as persistent architectural guidelines and project profile cont
                 OmnisenseLogger.Log("Knowledge Graph summary is empty or errored. Skipping injection into Planner context.", "KG");
             }
 
+            // Inject chat history directly before the active request
+            if (_chatHistory != null)
+            {
+                foreach (var msg in _chatHistory)
+                {
+                    ctx.Add(msg);
+                }
+            }
+
             ctx.Add(new LLMMessage { role = "user", content = userRequest });
 
             OmnisenseLogger.Log($"Built PLANNER Context: {ctx.Count} messages (Request: {userRequest?.Length ?? 0} chars, DNA: {_dnaContent?.Length ?? 0} chars)", "CONTEXT");
@@ -201,6 +214,15 @@ This file serves as persistent architectural guidelines and project profile cont
             }
 
             AddEnvironmentState(ctx);
+
+            // Inject chat history directly before the active request
+            if (_chatHistory != null)
+            {
+                foreach (var msg in _chatHistory)
+                {
+                    ctx.Add(msg);
+                }
+            }
 
             // User's original request
             ctx.Add(new LLMMessage { role = "user", content = _userRequest });
@@ -296,6 +318,15 @@ This file serves as persistent architectural guidelines and project profile cont
             {
                 ctx.Add(Sys(stagedLedger));
                 OmnisenseLogger.Log($"Injected Staged Actions Ledger into Worker context ({stagedLedger.Length} chars).", "CONTEXT");
+            }
+
+            // Inject chat history directly before the active request
+            if (_chatHistory != null)
+            {
+                foreach (var msg in _chatHistory)
+                {
+                    ctx.Add(msg);
+                }
             }
 
             // User's original request
@@ -430,6 +461,7 @@ This file serves as persistent architectural guidelines and project profile cont
             public List<string> completedSummaries;
             public List<string> scratchpad;
             public List<LLMMessage> workerHistory;
+            public List<LLMMessage> chatHistory;
         }
 
         public void Save()
@@ -440,7 +472,8 @@ This file serves as persistent architectural guidelines and project profile cont
                 currentSubTask = _currentSubTask,
                 completedSummaries = _completedSummaries,
                 scratchpad = _persistentScratchpad,
-                workerHistory = _workerHistory
+                workerHistory = _workerHistory,
+                chatHistory = _chatHistory
             };
             EditorPrefs.SetString(PREFS_CONTEXT, JsonUtility.ToJson(state));
         }
@@ -460,7 +493,8 @@ This file serves as persistent architectural guidelines and project profile cont
                         _completedSummaries = state.completedSummaries ?? new List<string>();
                         _persistentScratchpad = state.scratchpad ?? new List<string>();
                         _workerHistory = state.workerHistory ?? new List<LLMMessage>();
-                        Debug.Log($"[Omnisense-Context] Context restored: {_completedSummaries.Count} summaries, {_workerHistory.Count} worker messages.");
+                        _chatHistory = state.chatHistory ?? new List<LLMMessage>();
+                        Debug.Log($"[Omnisense-Context] Context restored: {_completedSummaries.Count} summaries, {_workerHistory.Count} worker messages, {_chatHistory.Count} chat history messages.");
                     }
                 }
                 catch (Exception e)
@@ -479,8 +513,29 @@ This file serves as persistent architectural guidelines and project profile cont
             _completedSummaries.Clear();
             _workerHistory.Clear();
             _persistentScratchpad.Clear();
+            _chatHistory.Clear();
             Save();
             Debug.Log("[Omnisense-Context] All agent contexts cleared.");
+        }
+
+        private string CleanHistoryMessageContent(string content)
+        {
+            if (string.IsNullOrEmpty(content)) return "";
+
+            // 1. Strip out <thought>...</thought> blocks
+            content = Regex.Replace(content, @"<thought>.*?</thought>", "", RegexOptions.Singleline);
+
+            // 2. Strip out [Observation] and everything that follows (raw tool outputs/traces)
+            if (content.Contains("[Observation]"))
+            {
+                var parts = content.Split(new[] { "[Observation]" }, StringSplitOptions.None);
+                content = parts[0];
+            }
+
+            // 3. Strip out [Context: ...] links
+            content = Regex.Replace(content, @"\[Context: .*?\]", "");
+
+            return content.Trim();
         }
 
         /// <summary>Syncs context from a restored ChatSession.</summary>
@@ -489,18 +544,53 @@ This file serves as persistent architectural guidelines and project profile cont
             Clear();
             if (session == null || session.messages == null) return;
 
-            // Restore the last user message as the user request
+            // Find the last user message as the active request
+            int lastUserIdx = -1;
             for (int i = session.messages.Count - 1; i >= 0; i--)
             {
                 if (session.messages[i].sender == "User")
                 {
+                    lastUserIdx = i;
                     _userRequest = session.messages[i].content;
                     break;
                 }
             }
 
+            // Populate _chatHistory with previous User and AI messages up to lastUserIdx
+            _chatHistory.Clear();
+            if (lastUserIdx > 0)
+            {
+                for (int i = 0; i < lastUserIdx; i++)
+                {
+                    var msg = session.messages[i];
+                    string role = null;
+                    if (msg.sender == "User")
+                        role = "user";
+                    else if (msg.sender == "AI")
+                        role = "assistant";
+
+                    if (role != null && !string.IsNullOrEmpty(msg.content))
+                    {
+                        string content = CleanHistoryMessageContent(msg.content);
+                        if (string.IsNullOrEmpty(content)) continue;
+
+                        if (content.Length > 2000)
+                        {
+                            content = content.Substring(0, 2000) + "... (truncated)";
+                        }
+                        _chatHistory.Add(new LLMMessage { role = role, content = content });
+                    }
+                }
+
+                // Constrain list size to the most recent 12 messages
+                if (_chatHistory.Count > 12)
+                {
+                    _chatHistory.RemoveRange(0, _chatHistory.Count - 12);
+                }
+            }
+
             Save();
-            Debug.Log($"[Omnisense-Context] Synced with session: {session.name}");
+            Debug.Log($"[Omnisense-Context] Synced with session: {session.name}. Loaded {_chatHistory.Count} history messages.");
         }
     }
 }
