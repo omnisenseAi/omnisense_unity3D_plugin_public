@@ -576,5 +576,34 @@ Added display support for `add_script_component` operations inside transaction d
   - **Google Imagen**: Builds a POST request to Google's Imagen endpoint, dynamically mapping resolution inputs to optimal API aspect ratios (`1:1`, `4:3`, `16:9`, `3:4`, `9:16`), and directly parses base64-encoded image bytes from the JSON response.
 - **Asset Database Integration**: Verifies and creates the target storage folder if missing, writes unique timestamped `.png` files to disk, and executes immediate import via `AssetDatabase.ImportAsset` and `AssetDatabase.Refresh`.
 
+---
+
+## 51. Manual Sprite & Image Editor Suite (Phase 52)
+- **Standalone Editor Window (`OmnisenseImageEditorWindow.cs`)**: Implemented a standalone, lightweight, developer-driven utility registered under the menu bar at `Window > OmniSense > Image Editor`.
+- **Integrated Canvas Preview Workspace**: 
+  - Rendered loaded textures with a custom checkerboard pattern grid for transparent pixels.
+  - Formatted canvas viewport bounds to scale textures responsively while preserving aspect ratios.
+- **Strictly Copy-Safe & Non-Destructive Operations**:
+  - The original source image file is never modified or overwritten under any condition.
+  - Slices, crops, and rescales are saved as brand new asset files, leaving original templates fully intact.
+- **Output Directory Selector**:
+  - Integrated a persistent `Save / Output Directory` text field with an interactive browse folder button in the left sidebar.
+  - Automatically loads and defaults to the active texture's project directory for convenience, but allows saving to any other path.
+  - Saves choice settings via PlayerPrefs key persistence.
+- **Grid Sprite Sheet Slicer (Individual PNG Extractor)**:
+  - Extracts each cell of a grid as a separate standalone PNG file saved inside the output directory.
+  - Renders cyan overlay grid guidelines in real time to preview boundaries before committing extraction.
+  - Automatically clamps target cell widths and heights inside the pixel extraction loop to prevent `Texture2D.GetPixels` out-of-bounds exceptions for non-integer division residuals.
+- **Sprite Pivot Settings Editor (Per-Slice Alignment)**:
+  - Built-in alignment selectors (Center, BottomCenter, TopLeft, etc.) that configure the cell's `TextureImporterSettings` on import.
+  - Implemented custom coordinates entry fields mapping Custom pivots between `(0, 0)` and `(1, 1)`.
+- **Interactive Cropping & Resizing Canvas**:
+  - Programmed custom click-and-drag border handle calculations to resize selection bounds directly on the preview GUI window.
+  - Supports Free or locked aspect ratio constraints (`1:1`, `16:9`, `9:16`).
+  - Integrates Nearest Neighbor and Bilinear Resampling algorithms, writing the result as a new asset copy `{Name}_cropped.png` or `{Name}_resized.png` to the output folder.
+- **Image Generation Handoff Button**:
+  - Connected a convenience link button (`✂ Open in Image Editor`) in [ImageGenerationPopup.cs](file:///e:/OmniSense_Unity3D_Plugin/OmniSense_Unity3D_Plugin/Assets/Editor/Omnisense/ImageGenerationPopup.cs) that displays upon successful generation.
+  - Clicking this shortcut directly opens the editor window and loads the path of the generated asset (without automatic AI intervention).
+
 
 

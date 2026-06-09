@@ -19,6 +19,8 @@ namespace Omnisense
         private TextField _pathField;
         private Button _generateBtn;
         private Label _statusLabel;
+        private Button _openEditorBtn;
+        private string _lastGeneratedPath = "";
 
         private UnityWebRequest _activeRequest;
         private double _requestStartTime;
@@ -205,10 +207,35 @@ namespace Omnisense
             _statusLabel.style.color = new StyleColor(new Color(0.7f, 0.7f, 0.7f));
             _statusLabel.style.fontSize = 11;
             _statusLabel.style.whiteSpace = WhiteSpace.Normal;
-            _statusLabel.style.marginBottom = 15;
+            _statusLabel.style.marginBottom = 5;
             _statusLabel.style.minHeight = 30;
             _statusLabel.style.alignSelf = Align.Center;
             root.Add(_statusLabel);
+
+            // Open in Image Editor Button (Initially Hidden)
+            _openEditorBtn = new Button(() => {
+                if (!string.IsNullOrEmpty(_lastGeneratedPath))
+                {
+                    OmnisenseImageEditorWindow.OpenWithAsset(_lastGeneratedPath);
+                }
+            }) { text = "✂ Open in Image Editor" };
+            _openEditorBtn.style.display = DisplayStyle.None;
+            _openEditorBtn.style.height = 24;
+            _openEditorBtn.style.fontSize = 11;
+            _openEditorBtn.style.unityFontStyleAndWeight = FontStyle.Bold;
+            _openEditorBtn.style.backgroundColor = new StyleColor(new Color(0.2f, 0.44f, 0.68f));
+            _openEditorBtn.style.color = new StyleColor(Color.white);
+            _openEditorBtn.style.marginBottom = 10;
+            _openEditorBtn.style.alignSelf = Align.Center;
+            _openEditorBtn.style.borderTopLeftRadius = 4;
+            _openEditorBtn.style.borderTopRightRadius = 4;
+            _openEditorBtn.style.borderBottomLeftRadius = 4;
+            _openEditorBtn.style.borderBottomRightRadius = 4;
+            _openEditorBtn.style.borderLeftWidth = 0;
+            _openEditorBtn.style.borderRightWidth = 0;
+            _openEditorBtn.style.borderTopWidth = 0;
+            _openEditorBtn.style.borderBottomWidth = 0;
+            root.Add(_openEditorBtn);
 
             // Generate Button
             _generateBtn = new Button(OnGenerateClicked) { text = "Generate Image" };
@@ -266,6 +293,7 @@ namespace Omnisense
             }
 
             SetLoadingState(true);
+            if (_openEditorBtn != null) _openEditorBtn.style.display = DisplayStyle.None;
             ShowStatus("Generating image asset (this can take 1-3 minutes)...");
 
             // Construct style suffix
@@ -583,6 +611,9 @@ namespace Omnisense
                 Debug.Log($"[Omnisense-ImageGen] Calling AssetDatabase.ImportAsset and Refresh for path: {finalPath}");
                 AssetDatabase.ImportAsset(finalPath);
                 AssetDatabase.Refresh();
+
+                _lastGeneratedPath = finalPath;
+                if (_openEditorBtn != null) _openEditorBtn.style.display = DisplayStyle.Flex;
 
                 ShowSuccess($"Asset saved and imported successfully at:\n{finalPath}");
             }
