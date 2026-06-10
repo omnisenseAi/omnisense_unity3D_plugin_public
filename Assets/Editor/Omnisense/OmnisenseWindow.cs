@@ -119,6 +119,9 @@ namespace Omnisense
             var btnImageGen = root.Q<Button>("btn-image-gen");
             if (btnImageGen != null) btnImageGen.clicked += () => ImageGenerationPopup.Open();
 
+            var btnModelGen = root.Q<Button>("btn-model-gen");
+            if (btnModelGen != null) btnModelGen.clicked += () => ModelGenerationPopup.Open();
+
             root.Q<Button>("send-button").clicked += SendMessage;
             root.Q<Button>("btn-history").clicked += ShowHistory;
             root.Q<Button>("btn-undo").clicked += () => OmnisenseUndoManager.PerformUndo();
@@ -222,6 +225,9 @@ namespace Omnisense
             root.Q<TextField>("anthropic-key").RegisterValueChangedCallback(_ => SaveSettings());
             root.Q<TextField>("gemini-key").RegisterValueChangedCallback(_ => SaveSettings());
             root.Q<TextField>("grok-key").RegisterValueChangedCallback(_ => SaveSettings());
+            root.Q<TextField>("tripo3d-key")?.RegisterValueChangedCallback(_ => SaveSettings());
+            root.Q<TextField>("meshy-key")?.RegisterValueChangedCallback(_ => SaveSettings());
+            root.Q<TextField>("luma-key")?.RegisterValueChangedCallback(_ => SaveSettings());
             root.Q<TextField>("selfhosted-url")?.RegisterValueChangedCallback(_ => SaveSettings());
             root.Q<TextField>("selfhosted-model")?.RegisterValueChangedCallback(_ => SaveSettings());
             root.Q<TextField>("selfhosted-key")?.RegisterValueChangedCallback(_ => SaveSettings());
@@ -452,6 +458,13 @@ namespace Omnisense
             EditorPrefs.SetString("Omnisense_Anthropic_Key", rootVisualElement.Q<TextField>("anthropic-key").value);
             EditorPrefs.SetString("Omnisense_Gemini_Key", rootVisualElement.Q<TextField>("gemini-key").value);
             EditorPrefs.SetString("Omnisense_Grok_Key", rootVisualElement.Q<TextField>("grok-key").value);
+
+            var tripoKey = rootVisualElement.Q<TextField>("tripo3d-key");
+            if (tripoKey != null) EditorPrefs.SetString("Omnisense_Tripo3D_Key", tripoKey.value);
+            var meshyKey = rootVisualElement.Q<TextField>("meshy-key");
+            if (meshyKey != null) EditorPrefs.SetString("Omnisense_Meshy_Key", meshyKey.value);
+            var lumaKey = rootVisualElement.Q<TextField>("luma-key");
+            if (lumaKey != null) EditorPrefs.SetString("Omnisense_Luma_Key", lumaKey.value);
             
             var shUrl = rootVisualElement.Q<TextField>("selfhosted-url");
             if (shUrl != null) EditorPrefs.SetString("Omnisense_SelfHosted_URL", shUrl.value);
@@ -476,6 +489,13 @@ namespace Omnisense
             rootVisualElement.Q<TextField>("anthropic-key").value = EditorPrefs.GetString("Omnisense_Anthropic_Key", "");
             rootVisualElement.Q<TextField>("gemini-key").value = EditorPrefs.GetString("Omnisense_Gemini_Key", "");
             rootVisualElement.Q<TextField>("grok-key").value = EditorPrefs.GetString("Omnisense_Grok_Key", "");
+
+            var tripoKey = rootVisualElement.Q<TextField>("tripo3d-key");
+            if (tripoKey != null) tripoKey.value = EditorPrefs.GetString("Omnisense_Tripo3D_Key", "");
+            var meshyKey = rootVisualElement.Q<TextField>("meshy-key");
+            if (meshyKey != null) meshyKey.value = EditorPrefs.GetString("Omnisense_Meshy_Key", "");
+            var lumaKey = rootVisualElement.Q<TextField>("luma-key");
+            if (lumaKey != null) lumaKey.value = EditorPrefs.GetString("Omnisense_Luma_Key", "");
 
             var shUrl = rootVisualElement.Q<TextField>("selfhosted-url");
             if (shUrl != null) shUrl.value = EditorPrefs.GetString("Omnisense_SelfHosted_URL", "http://localhost:11434/v1");

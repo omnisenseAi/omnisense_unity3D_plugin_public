@@ -48,6 +48,7 @@
                     <ui:VisualElement class="input-footer">
                         <ui:Button name="btn-attach" text="📎" class="attach-button" tooltip="Attach file to context" />
                         <ui:Button name="btn-image-gen" text="🎨" class="image-gen-button" tooltip="Generate AI Image" />
+                        <ui:Button name="btn-model-gen" text="🧊" class="image-gen-button" tooltip="Generate AI 3D Model" />
                         <ui:VisualElement class="spacer" />
                         <ui:Button name="btn-stop" text="⏹" class="stop-button-circular hidden" tooltip="Stop AI execution" />
                         <ui:Button name="send-button" text="↑" class="send-button-circular" />
@@ -95,6 +96,15 @@
                             <ui:SliderInt name="grok-max-tokens-slider" low-value="1" high-value="8192" class="token-slider" />
                             <ui:IntegerField name="grok-max-tokens-field" class="token-field" />
                         </ui:VisualElement>
+
+                        <ui:Label text="Tripo3D API Key:" class="field-label" />
+                        <ui:TextField name="tripo3d-key" password="true" class="field-input" />
+
+                        <ui:Label text="Meshy API Key:" class="field-label" />
+                        <ui:TextField name="meshy-key" password="true" class="field-input" />
+
+                        <ui:Label text="Luma AI API Key:" class="field-label" />
+                        <ui:TextField name="luma-key" password="true" class="field-input" />
                     </ui:VisualElement>
 
                     <ui:VisualElement name="selfhosted-settings" class="settings-group hidden">

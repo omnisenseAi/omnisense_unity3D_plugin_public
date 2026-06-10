@@ -616,6 +616,27 @@ Added display support for `add_script_component` operations inside transaction d
 - **Trace & Thought Stripping Engine**: Added a `CleanHistoryMessageContent` helper to filter out thoughts (`<thought>...</thought>`), tool traces (`[Observation]...`), and context chips (`[Context: ...]`), storing only the high-level dialogue summaries and completely preventing the full technical execution trace from bloating context memory.
 - **Isolated Context Injections**: Integrated dialogue history injection into the Planner (`BuildPlannerContext`), Manager (`BuildManagerContext`), and Worker (`BuildWorkerContext`) context builders directly before the active user request, allowing all agents to fully remember past conversation turns without contaminating the active sub-task's raw tools and ledger state.
 
+---
+
+## 53. AI 3D Model Generator & Converter Suite (Phase 54)
+- **User-Triggered Window Activation**: Added a dedicated 3D Model Generation button (`🧊`) in the chat input footer in `OmnisenseWindow.uxml` next to the image generation button.
+- **Unified 3D Generation Interface (`ModelGenerationPopup.cs`)**:
+  - Implemented a floating Unity EditorWindow popup styled with modern dark mode UI styling.
+  - Features custom prompt description input, save location picker with folder browse button, and polling state label.
+  - Implements unique filename generation using timestamps (e.g. `model_20260610_130000.js` or `.glb`) to prevent overwriting assets.
+  - Saves choice folder paths to PlayerPrefs under the unique key `"model_generation_save_location"` to avoid collision with the image generation path.
+- **Three-Way Generator Framework**:
+  - **Three.js Code Generator**: Communicates with the standard selected LLM to procedurally write Three.js JavaScript scene construction code, saving the output file directly.
+  - **Meshy AI Client**: Communicates with the Meshy v2 text-to-3D endpoints, posts prompt requests, polls asynchronous generation progress, and downloads/imports the resulting textured `.glb` model.
+  - **Tripo3D Client**: Communicates with the Tripo OpenAPI text_to_model v2 endpoints, handles task queueing and status polling, and downloads/imports the final `.glb` asset.
+- **Dynamic Settings Persistence**: Added Tripo3D, Meshy, and Luma API key text fields under Settings in `OmnisenseWindow.uxml` and bound them to save/load settings under `Omnisense_Tripo3D_Key`, `Omnisense_Meshy_Key`, and `Omnisense_Luma_Key` in `EditorPrefs`.
+- **Node-Based Three.js-to-glTF Converter**:
+  - Automatically initializes a clean, decoupled Node.js environment directory in `UserSettings/Omnisense_3D_Helpers` containing `package.json` and a headless `three2gltf.js` script.
+  - Suppresses warnings and import latency by keeping all `node_modules` folders completely out of Unity's `Assets` scope.
+  - Automatically runs background asynchronous `npm install` for Three.js dependencies when first enabled.
+  - Evaluates generated Three.js code inside a sandbox context with a pre-configured `THREE.Scene` and geometry definitions, exporting the resulting scene mesh as a standard `.gltf` asset using `GLTFExporter`.
+
+
 
 
 
