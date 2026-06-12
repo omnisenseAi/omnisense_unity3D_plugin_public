@@ -579,7 +579,7 @@ Added display support for `add_script_component` operations inside transaction d
 ---
 
 ## 51. Manual Sprite & Image Editor Suite (Phase 52)
-- **Standalone Editor Window (`OmnisenseImageEditorWindow.cs`)**: Implemented a standalone, lightweight, developer-driven utility registered under the menu bar at `Window > OmniSense > Image Editor`.
+- **Standalone Editor Window (`OmnisenseImageEditorWindow.cs`)**: Implemented a standalone, lightweight, developer-driven utility registered under the menu bar at `Omnisense > Image Editor` and `Window > Omnisense > Image Editor`.
 - **Integrated Canvas Preview Workspace**: 
   - Rendered loaded textures with a custom checkerboard pattern grid for transparent pixels.
   - Formatted canvas viewport bounds to scale textures responsively while preserving aspect ratios.

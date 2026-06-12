@@ -1,3 +1,15 @@
+// =================================================================================================
+// PROJECT: Omnisense AI (Unity3D Integration Plugin)
+// AUTHOR:  Rahul Bhardwaj
+// COMPANY: Omnisense AI
+// YEAR:    2026
+//
+// COPYRIGHT NOTICE:
+// Copyright (c) 2026 Rahul Bhardwaj / Omnisense AI. All rights reserved.
+// This software and associated documentation files (the "Software") are proprietary and confidential.
+// Unauthorized copying, distribution, or modification of this file is strictly prohibited.
+// =================================================================================================
+
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -9,8 +21,30 @@ using UnityEngine;
 namespace Omnisense
 {
     /// <summary>
+    /// CORE PHILOSOPHY & DESIGN DECISION:
+    /// AgentContextManager provides isolated context construction and dialogue history memory, acting as the
+    /// cognitive buffer for the agent.
+    /// 
+    /// WHY:
+    /// In a multi-agent system, giving the same execution trace to all agents causes them to read redundant
+    /// data, triggering context pollution and execution confusion. Additionally, long execution trace logs
+    /// (e.g. reading 1000-line scripts) quickly fill LLM context windows, leading to high token costs and
+    /// "lost in the middle" memory recall errors.
+    /// To address this:
+    ///   1. Role Isolation: Planner, Manager, and Worker build distinct, isolated prompt payloads from core pools.
+    ///   2. Memory Pruning: Prunes technical noise (tool logs, `<thought>` blocks) from the stored chat history turns,
+    ///      maintaining only dialogue summaries.
+    ///   3. Sliding Window & Truncation: Restricts stored history turns and truncates individual messages exceeding
+    ///      2000 characters.
+    /// 
+    /// HOW:
+    /// Utilizes distinct lists for core messages, task summaries, and active worker histories, merging them with
+    /// System and DNA content templates before final API submission.
+    /// </summary>
+    /// <remarks>
     /// Manages isolated conversation histories per agent role.
     /// Fixes W4: Planner, Manager, and Workers no longer share context.
+    /// </remarks>
     ///
     /// Architecture:
     /// - _coreMessages: System prompts, DNA, env-state, original user request — shared as read-only context.

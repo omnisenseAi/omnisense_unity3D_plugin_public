@@ -1,3 +1,15 @@
+// =================================================================================================
+// PROJECT: Omnisense AI (Unity3D Integration Plugin)
+// AUTHOR:  Rahul Bhardwaj
+// COMPANY: Omnisense AI
+// YEAR:    2026
+//
+// COPYRIGHT NOTICE:
+// Copyright (c) 2026 Rahul Bhardwaj / Omnisense AI. All rights reserved.
+// This software and associated documentation files (the "Software") are proprietary and confidential.
+// Unauthorized copying, distribution, or modification of this file is strictly prohibited.
+// =================================================================================================
+
 using System;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
@@ -5,6 +17,24 @@ using UnityEngine;
 
 namespace Omnisense
 {
+    /// <summary>
+    /// CORE PHILOSOPHY & DESIGN DECISION:
+    /// ToolDispatcher acts as the structural gateway mapping external JSON-RPC tool calls to direct C#
+    /// compiler/scene API operations in the MCPToolRegistry.
+    /// 
+    /// WHY:
+    /// Coupling LLM dispatch logic directly inside the main Orchestrator makes codebases extremely rigid,
+    /// difficult to debug, and prone to parsing failures. By segregating the dispatcher:
+    ///   1. Clear Serialization Boundary: Decouples raw JSON payload parameters from API invocation parameters.
+    ///   2. Gated Trust Framework (Deferred vs Blocking): Classifies tools automatically based on severity.
+    ///      Safe edits (e.g. read_file) auto-execute; write actions stage for batch user approval; out-of-bounds or
+    ///      shell actions pause execution and block until explicit consent.
+    ///   3. UI Diff Summarization: Translates parameters into color-coded summaries for the editor window.
+    /// 
+    /// HOW:
+    /// Maps request strings to Registry static calls using a clean switch statement, implements a fallback regex
+    /// parser for broken JSON-RPC arrays, and calculates diff previews.
+    /// </summary>
     // ─────────────────────────────────────────────────────────────
     //  Shared Tool Request/Param Types (moved from AIOrchestrator)
     // ─────────────────────────────────────────────────────────────

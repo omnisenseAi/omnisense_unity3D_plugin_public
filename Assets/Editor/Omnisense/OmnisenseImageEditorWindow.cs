@@ -1,3 +1,15 @@
+// =================================================================================================
+// PROJECT: Omnisense AI (Unity3D Integration Plugin)
+// AUTHOR:  Rahul Bhardwaj
+// COMPANY: Omnisense AI
+// YEAR:    2026
+//
+// COPYRIGHT NOTICE:
+// Copyright (c) 2026 Rahul Bhardwaj / Omnisense AI. All rights reserved.
+// This software and associated documentation files (the "Software") are proprietary and confidential.
+// Unauthorized copying, distribution, or modification of this file is strictly prohibited.
+// =================================================================================================
+
 using System;
 using System.IO;
 using System.Collections.Generic;
@@ -8,6 +20,23 @@ using UnityEditor.UIElements;
 
 namespace Omnisense
 {
+    /// <summary>
+    /// CORE PHILOSOPHY & DESIGN DECISION:
+    /// The OmnisenseImageEditorWindow provides non-destructive, standalone manual image post-processing
+    /// inside the Unity editor, fully integrated with UI Toolkit and Project tab workflows.
+    /// 
+    /// WHY:
+    /// Often, AI-generated images or raw sprites require immediate, small adjustments (cropping, grid-slicing
+    /// sheets, resizing, pivot adjustment) before being usable in game scenes. Forcing the developer to launch
+    /// Photoshop or GIMP breaks focus.
+    /// Crucially, we enforce a STRICTLY COPY-SAFE policy where the original asset is NEVER modified directly;
+    /// all alterations compile into newly spawned template copies (e.g. `{Name}_sliced_X_Y.png`), maintaining
+    /// absolute asset safety.
+    /// 
+    /// HOW:
+    /// Combines UI Toolkit layouts for properties (grid size, pivots, aspect ratios) and an IMGUI container
+    /// for responsive grid preview overlays. Includes drag-and-drop callbacks and native file picking systems.
+    /// </summary>
     public class OmnisenseImageEditorWindow : EditorWindow
     {
         private enum EditMode
@@ -48,6 +77,7 @@ namespace Omnisense
 
         // Output Settings
         private TextField _outputPathField;
+        private TextField _imagePathField;
 
         // UI Controls (UI Toolkit)
         private Label _assetNameLabel;
@@ -69,20 +99,40 @@ namespace Omnisense
         private Vector2 _dragStartMousePos;
         private Rect _dragStartCropRect;
 
-        [MenuItem("Window/OmniSense/Image Editor")]
+        [MenuItem("Omnisense/Image Editor")]
+        [MenuItem("Window/Omnisense/Image Editor")]
         public static void Open()
         {
-            var window = GetWindow<OmnisenseImageEditorWindow>("🎨 OmniSense Image Editor");
+            var window = GetWindow<OmnisenseImageEditorWindow>("🎨 Omnisense Image Editor");
             window.minSize = new Vector2(700, 520);
             window.Show();
         }
 
         public static void OpenWithAsset(string path)
         {
-            var window = GetWindow<OmnisenseImageEditorWindow>("🎨 OmniSense Image Editor");
+            var window = GetWindow<OmnisenseImageEditorWindow>("🎨 Omnisense Image Editor");
             window.minSize = new Vector2(700, 520);
             window.LoadAsset(path);
             window.Show();
+        }
+
+        [MenuItem("Assets/Omnisense/Image Editor")]
+        public static void OpenFromAssets()
+        {
+            if (Selection.activeObject is Texture2D tex)
+            {
+                string path = AssetDatabase.GetAssetPath(tex);
+                if (!string.IsNullOrEmpty(path))
+                {
+                    OpenWithAsset(path);
+                }
+            }
+        }
+
+        [MenuItem("Assets/Omnisense/Image Editor", true)]
+        public static bool ValidateOpenFromAssets()
+        {
+            return Selection.activeObject is Texture2D;
         }
 
         private void OnEnable()
@@ -90,11 +140,60 @@ namespace Omnisense
             BuildUI();
             Selection.selectionChanged += OnSelectionChanged;
             OnSelectionChanged();
+
+            var root = rootVisualElement;
+            root.RegisterCallback<DragUpdatedEvent>(OnDragUpdated);
+            root.RegisterCallback<DragPerformEvent>(OnDragPerform);
         }
 
         private void OnDisable()
         {
             Selection.selectionChanged -= OnSelectionChanged;
+
+            var root = rootVisualElement;
+            if (root != null)
+            {
+                root.UnregisterCallback<DragUpdatedEvent>(OnDragUpdated);
+                root.UnregisterCallback<DragPerformEvent>(OnDragPerform);
+            }
+        }
+
+        private void OnDragUpdated(DragUpdatedEvent evt)
+        {
+            bool containsTexture = false;
+            foreach (var obj in DragAndDrop.objectReferences)
+            {
+                if (obj is Texture2D)
+                {
+                    containsTexture = true;
+                    break;
+                }
+            }
+            if (containsTexture)
+            {
+                DragAndDrop.visualMode = DragAndDropVisualMode.Copy;
+            }
+            else
+            {
+                DragAndDrop.visualMode = DragAndDropVisualMode.Rejected;
+            }
+        }
+
+        private void OnDragPerform(DragPerformEvent evt)
+        {
+            DragAndDrop.AcceptDrag();
+            foreach (var obj in DragAndDrop.objectReferences)
+            {
+                if (obj is Texture2D tex)
+                {
+                    string path = AssetDatabase.GetAssetPath(tex);
+                    if (!string.IsNullOrEmpty(path))
+                    {
+                        LoadAsset(path);
+                        break;
+                    }
+                }
+            }
         }
 
         private void OnSelectionChanged()
@@ -125,6 +224,11 @@ namespace Omnisense
                 {
                     _assetNameLabel.text = Path.GetFileName(path);
                     _assetDetailsLabel.text = $"{tex.width} x {tex.height} px | {(TextureImporter.GetAtPath(path) is TextureImporter imp ? imp.spriteImportMode.ToString() : "Default")}";
+                }
+
+                if (_imagePathField != null && _imagePathField.value != path)
+                {
+                    _imagePathField.SetValueWithoutNotify(path);
                 }
 
                 // Default output folder to the target texture folder
@@ -192,6 +296,64 @@ namespace Omnisense
             statusBox.Add(_assetNameLabel);
             statusBox.Add(_assetDetailsLabel);
             sidebar.Add(statusBox);
+
+            // Target Image Selection Box
+            var selectImgBox = new VisualElement();
+            selectImgBox.style.backgroundColor = new StyleColor(new Color(0.1f, 0.1f, 0.11f));
+            selectImgBox.style.paddingLeft = 8;
+            selectImgBox.style.paddingRight = 8;
+            selectImgBox.style.paddingTop = 8;
+            selectImgBox.style.paddingBottom = 8;
+            selectImgBox.style.marginBottom = 12;
+            selectImgBox.style.borderTopLeftRadius = 4;
+            selectImgBox.style.borderTopRightRadius = 4;
+            selectImgBox.style.borderBottomLeftRadius = 4;
+            selectImgBox.style.borderBottomRightRadius = 4;
+
+            var selectImgLabel = new Label("Target Image Asset:");
+            selectImgLabel.style.unityFontStyleAndWeight = FontStyle.Bold;
+            selectImgLabel.style.fontSize = 11;
+            selectImgLabel.style.color = new StyleColor(new Color(0.8f, 0.8f, 0.8f));
+            selectImgLabel.style.marginBottom = 4;
+
+            var selectImgRow = new VisualElement();
+            selectImgRow.style.flexDirection = FlexDirection.Row;
+            selectImgRow.style.alignItems = Align.Center;
+
+            _imagePathField = new TextField();
+            _imagePathField.value = _assetPath;
+            _imagePathField.style.flexGrow = 1;
+            var imgInput = _imagePathField.Q("unity-text-input");
+            if (imgInput != null) imgInput.style.backgroundColor = new StyleColor(new Color(0.08f, 0.08f, 0.1f));
+            _imagePathField.RegisterValueChangedCallback(evt => {
+                string p = evt.newValue.Trim();
+                if (!string.IsNullOrEmpty(p))
+                {
+                    LoadAsset(p);
+                }
+            });
+
+            var browseImgBtn = new Button(() => {
+                string selected = EditorUtility.OpenFilePanel("Select Image Asset", "Assets", "png,jpg,jpeg,tga");
+                if (!string.IsNullOrEmpty(selected))
+                {
+                    if (selected.StartsWith(Application.dataPath))
+                    {
+                        selected = "Assets" + selected.Substring(Application.dataPath.Length);
+                    }
+                    _imagePathField.value = selected;
+                    LoadAsset(selected);
+                }
+            }) { text = "..." };
+            browseImgBtn.style.marginLeft = 4;
+            browseImgBtn.style.width = 25;
+            browseImgBtn.style.height = 20;
+
+            selectImgRow.Add(_imagePathField);
+            selectImgRow.Add(browseImgBtn);
+            selectImgBox.Add(selectImgLabel);
+            selectImgBox.Add(selectImgRow);
+            sidebar.Add(selectImgBox);
 
             // Mode Toggle Toolbar Buttons
             var modeToggleGroup = new VisualElement();

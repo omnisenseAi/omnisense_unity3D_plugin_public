@@ -9,7 +9,6 @@ namespace Omnisense
 {
     public static class CombatUISceneFixer
     {
-        [MenuItem("Omnisense/Fix Combat UI")]
         public static void FixCombatUI()
         {
             Debug.Log("[CombatUISceneFixer] Starting scene fixes...");

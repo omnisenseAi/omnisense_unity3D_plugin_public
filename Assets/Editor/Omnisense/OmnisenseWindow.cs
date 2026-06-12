@@ -1,3 +1,15 @@
+// =================================================================================================
+// PROJECT: Omnisense AI (Unity3D Integration Plugin)
+// AUTHOR:  Rahul Bhardwaj
+// COMPANY: Omnisense AI
+// YEAR:    2026
+//
+// COPYRIGHT NOTICE:
+// Copyright (c) 2026 Rahul Bhardwaj / Omnisense AI. All rights reserved.
+// This software and associated documentation files (the "Software") are proprietary and confidential.
+// Unauthorized copying, distribution, or modification of this file is strictly prohibited.
+// =================================================================================================
+
 using System;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
@@ -10,6 +22,23 @@ using UnityEngine.SceneManagement;
 
 namespace Omnisense
 {
+    /// <summary>
+    /// CORE PHILOSOPHY & DESIGN DECISION:
+    /// OmnisenseWindow acts as the centralized control panel and chat dashboard for the Omnisense AI plugin.
+    /// 
+    /// WHY:
+    /// AI plugins in Unity often feel detached from the editor environment, forcing developers to look away
+    /// to external browser windows or CLI tools.
+    /// This window bridges that gap by providing a fully interactive, dockable UI Toolkit panel offering:
+    ///   1. Real-time agent chat loops directly connected to the Unity Scene and Asset database.
+    ///   2. Dynamic, ephemeral context bindings (drag & drop files, Hierarchy objects, or smart Ctrl+V pastes).
+    ///   3. Rich settings panels to configure API keys (OpenAI, Gemini, Anthropic, Grok, Tripo3D, Meshy) and tokens.
+    ///   4. Persistent session management that keeps conversational context clean and compact.
+    /// 
+    /// HOW:
+    /// Integrates UXML visual templates, USS layout rules, and bindings with the AIOrchestrator and
+    /// AgentContextManager systems. Automatically handles thread safety and layout updates on delay calls.
+    /// </summary>
     public class OmnisenseWindow : EditorWindow
     {
         private VisualElement _chatContainer;
@@ -40,11 +69,12 @@ namespace Omnisense
         private Button _tabCommercial;
         private Button _tabSelfhosted;
 
-        [MenuItem("Window/Omnisense AI")]
+        [MenuItem("Omnisense/AI Chat")]
+        [MenuItem("Window/Omnisense/AI Chat")]
         public static void ShowWindow()
         {
             OmnisenseWindow wnd = GetWindow<OmnisenseWindow>();
-            wnd.titleContent = new GUIContent("Omnisense AI");
+            wnd.titleContent = new GUIContent("Omnisense AI Chat");
             wnd.minSize = new Vector2(500, 600);
         }
 

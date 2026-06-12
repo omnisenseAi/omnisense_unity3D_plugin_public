@@ -1,3 +1,15 @@
+// =================================================================================================
+// PROJECT: Omnisense AI (Unity3D Integration Plugin)
+// AUTHOR:  Rahul Bhardwaj
+// COMPANY: Omnisense AI
+// YEAR:    2026
+//
+// COPYRIGHT NOTICE:
+// Copyright (c) 2026 Rahul Bhardwaj / Omnisense AI. All rights reserved.
+// This software and associated documentation files (the "Software") are proprietary and confidential.
+// Unauthorized copying, distribution, or modification of this file is strictly prohibited.
+// =================================================================================================
+
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -10,6 +22,23 @@ using UnityEngine.Networking;
 
 namespace Omnisense
 {
+    /// <summary>
+    /// CORE PHILOSOPHY & DESIGN DECISION:
+    /// The ModelGenerationPopup serves as a two-fold AI 3D asset generation and conversion suite.
+    /// 
+    /// WHY:
+    /// Game development relies heavily on 3D assets, but generating 3D models directly inside the editor usually
+    /// requires either complex offline assets pipeline or expensive, heavy native plugins. By integrating:
+    ///   1. Procedural Three.js Code Generation (LLM-driven): Let standard LLMs draft a Three.js scene script.
+    ///   2. Headless Node.js to glTF conversion: Decouples rendering and conversion outside Assets/ to avoid
+    ///      Unity Asset Database import lags and warnings (by running node/npm from the UserSettings/ folder).
+    ///   3. Text-to-3D APIs (Meshy/Tripo3D): Utilizes cloud services that output production-ready .glb files.
+    /// This hybrid model lets developers rapidly prototype geometries without bloating the Git repository or project compile times.
+    /// 
+    /// HOW:
+    /// The popup uses UnityWebRequest for asynchronous polling of Meshy & Tripo tasks, handles file selection interfaces,
+    /// and spawns a background 'node' process to compile Javascript scenes into standalone glTF files.
+    /// </summary>
     public class ModelGenerationPopup : EditorWindow
     {
         private TextField _promptField;
@@ -32,7 +61,8 @@ namespace Omnisense
         private double _lastPollTime = 0;
         private int _pollAttempts = 0;
 
-        [MenuItem("Window/Omnisense 3D Model Generator")]
+        [MenuItem("Omnisense/3D Model Generator")]
+        [MenuItem("Window/Omnisense/3D Model Generator")]
         public static void Open()
         {
             var window = GetWindow<ModelGenerationPopup>(true, "🧊 AI 3D Model Generator", true);

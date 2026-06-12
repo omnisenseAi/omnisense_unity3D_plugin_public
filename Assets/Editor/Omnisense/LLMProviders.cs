@@ -1,3 +1,15 @@
+// =================================================================================================
+// PROJECT: Omnisense AI (Unity3D Integration Plugin)
+// AUTHOR:  Rahul Bhardwaj
+// COMPANY: Omnisense AI
+// YEAR:    2026
+//
+// COPYRIGHT NOTICE:
+// Copyright (c) 2026 Rahul Bhardwaj / Omnisense AI. All rights reserved.
+// This software and associated documentation files (the "Software") are proprietary and confidential.
+// Unauthorized copying, distribution, or modification of this file is strictly prohibited.
+// =================================================================================================
+
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -9,6 +21,24 @@ using UnityEngine.Networking;
 
 namespace Omnisense
 {
+    /// <summary>
+    /// CORE PHILOSOPHY & DESIGN DECISION:
+    /// LLMProviders encapsulates the network communication, authentication headers, request serialization,
+    /// and response parsing logic for diverse LLM API gateways.
+    /// 
+    /// WHY:
+    /// Hardcoding specific API payload layouts directly inside the execution orchestrator creates massive code
+    /// duplication and prevents easy integration of new LLM releases. By modeling providers as implementations
+    /// of a common interface (ILLMProvider):
+    ///   1. Provider Abstraction: The orchestrator only deals with ILLMProvider, remaining fully vendor-agnostic.
+    ///   2. Unified Payload Translation: Translates generic message list arrays into specialized DTOs for OpenAI,
+    ///      Google Gemini, Anthropic Claude, and xAI Grok.
+    ///   3. Raw String Parsers: Bypasses standard json-deserialization failures for LLM output text using robust
+    ///      regex match fallbacks.
+    /// 
+    /// HOW:
+    /// Defines ILLMProvider and implements provider classes building UnityWebRequests and decoding response string values.
+    /// </summary>
     // ─────────────────────────────────────────────────────────────
     //  LLM Message — replaces the old AIOrchestrator.ChatMessage
     //  for LLM communication. Distinct from session ChatMessage.

@@ -53,9 +53,16 @@ The suite is implemented as a custom editor window (`OmnisenseImageEditorWindow`
 
 ### Window Initialization
 The editor window is registered in the Unity menu bar under:
-`Window > OmniSense > Image Editor`
+`Omnisense > Image Editor` and `Window > Omnisense > Image Editor`
 
-When opened, it can read the currently selected texture in the Project tab or accept an asset path forwarded by the manual convenience button in the image generation interface.
+Alternatively, you can right-click any image/texture asset directly in the Project tab and select:
+`Omnisense > Image Editor`
+
+### Asset Ingestion Methods
+Images can be loaded into the workspace in three ways:
+1. **Context/Selection Tracking**: Click **🔄 Load Selected Texture** to import the currently highlighted Project view asset.
+2. **Drag & Drop**: Drag and drop any texture asset directly onto the editor window canvas area.
+3. **Target Image Selector**: Click the browse button (`...`) next to the **Target Image Asset** text field to open a project file dialog and choose an image.
 
 ```mermaid
 graph TD
@@ -253,7 +260,7 @@ private static string CropTexture(string sourcePath, string outputFolder, RectIn
 ## 5. Timeline & Milestones (v1.0)
 
 * **Milestone 1: Editor Window Frame & Selection Hand-off** (2 Days)
-  * Set up `OmnisenseImageEditorWindow.cs` with the menu command item path (`Window > OmniSense > Image Editor`).
+  * Set up `OmnisenseImageEditorWindow.cs` with the menu command item paths (`Omnisense > Image Editor` and `Window > Omnisense > Image Editor`).
   * Connect a manual convenience link button in the [ImageGenerationPopup.cs](file:///e:/OmniSense_Unity3D_Plugin/OmniSense_Unity3D_Plugin/Assets/Editor/Omnisense/ImageGenerationPopup.cs) UI to open the editor window.
   * Integrate path selector text fields and folder browse interfaces in the sidebar.
 * **Milestone 2: Slices Extraction & Importer Settings** (2 Days)

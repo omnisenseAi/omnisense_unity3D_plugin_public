@@ -1,3 +1,15 @@
+// =================================================================================================
+// PROJECT: Omnisense AI (Unity3D Integration Plugin)
+// AUTHOR:  Rahul Bhardwaj
+// COMPANY: Omnisense AI
+// YEAR:    2026
+//
+// COPYRIGHT NOTICE:
+// Copyright (c) 2026 Rahul Bhardwaj / Omnisense AI. All rights reserved.
+// This software and associated documentation files (the "Software") are proprietary and confidential.
+// Unauthorized copying, distribution, or modification of this file is strictly prohibited.
+// =================================================================================================
+
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -8,17 +20,31 @@ using UnityEditor;
 using UnityEngine;
 using UnityEngine.Networking;
 
-
 namespace Omnisense
 {
     /// <summary>
-    /// Core orchestration state machine for the Omnisense multi-agent system.
-    /// Refactored from 2063 lines to use:
-    ///   - PromptLibrary.cs       (agent prompts)
-    ///   - LLMProviders.cs        (API serialization / deserialization)
-    ///   - ToolDispatcher.cs      (tool dispatch + diff summaries)
-    ///   - AgentContextManager.cs (isolated per-role histories)
+    /// CORE PHILOSOPHY & DESIGN DECISION:
+    /// The AIOrchestrator forms the brain of the Omnisense multi-agent engine, organizing interactions into
+    /// a structured hierarchy of agents (Planner, Manager, and Worker) executing a recursive ReAct loop.
+    /// 
+    /// WHY:
+    /// Game development tasks are often complex and cross-disciplinary (e.g., "Create a script, attach it to a GameObject,
+    /// and adjust coordinates"). A single LLM call usually fails to address all steps or generates wrong C# syntax.
+    /// By breaking down execution into:
+    ///   - The Planner: Builds a high-level step-by-step blueprint of the user request.
+    ///   - The Manager: Supervises progress and verifies task execution checklist criteria.
+    ///   - The Worker: Operates individual editor/scene tools via the ReAct loop.
+    /// We guarantee systematic execution. Pre-staged visual diffs ("Trust Framework") also ensure the developer remains
+    /// in control before destructive operations execute.
+    /// 
+    /// HOW:
+    /// Manages task queues, delegates network queries to LLMProviders, processes tool outcomes, and maintains
+    /// session summaries to prevent context memory saturation.
     /// </summary>
+    /// <remarks>
+    /// Core orchestration state machine for the Omnisense multi-agent system.
+    /// Refactored to use PromptLibrary, LLMProviders, ToolDispatcher, and AgentContextManager.
+    /// </remarks>
     public class AIOrchestrator
     {
         private static AIOrchestrator _instance;
