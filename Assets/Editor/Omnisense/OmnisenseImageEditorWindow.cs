@@ -231,13 +231,24 @@ namespace Omnisense
                     _imagePathField.SetValueWithoutNotify(path);
                 }
 
-                // Default output folder to the target texture folder
-                string directory = Path.GetDirectoryName(path).Replace("\\", "/");
-                if (_outputPathField != null && !string.IsNullOrEmpty(directory))
+                // Default output folder to the target texture folder ONLY if no custom path has been saved yet
+                string savedPath = PlayerPrefs.GetString("omnisense_image_editor_save_location", "");
+                if (string.IsNullOrEmpty(savedPath))
                 {
-                    _outputPathField.value = directory;
-                    PlayerPrefs.SetString("Omnisense_ImgEditor_OutputPath", directory);
-                    PlayerPrefs.Save();
+                    string directory = Path.GetDirectoryName(path).Replace("\\", "/");
+                    if (_outputPathField != null && !string.IsNullOrEmpty(directory))
+                    {
+                        _outputPathField.value = directory;
+                        PlayerPrefs.SetString("omnisense_image_editor_save_location", directory);
+                        PlayerPrefs.Save();
+                    }
+                }
+                else
+                {
+                    if (_outputPathField != null)
+                    {
+                        _outputPathField.value = savedPath;
+                    }
                 }
                 
                 if (_canvasContainer != null)
@@ -423,12 +434,12 @@ namespace Omnisense
             outRow.style.alignItems = Align.Center;
 
             _outputPathField = new TextField();
-            _outputPathField.value = PlayerPrefs.GetString("Omnisense_ImgEditor_OutputPath", "Assets/");
+            _outputPathField.value = PlayerPrefs.GetString("omnisense_image_editor_save_location", "Assets/");
             _outputPathField.style.flexGrow = 1;
             var outInput = _outputPathField.Q("unity-text-input");
             if (outInput != null) outInput.style.backgroundColor = new StyleColor(new Color(0.08f, 0.08f, 0.1f));
             _outputPathField.RegisterValueChangedCallback(evt => {
-                PlayerPrefs.SetString("Omnisense_ImgEditor_OutputPath", evt.newValue.Trim());
+                PlayerPrefs.SetString("omnisense_image_editor_save_location", evt.newValue.Trim());
                 PlayerPrefs.Save();
             });
 
