@@ -611,10 +611,17 @@ namespace Omnisense
                     Debug.Log($"[Omnisense-ImageGen] Created directory: {absoluteDir}");
                 }
 
-                string absoluteFilePath = finalPath;
-                if (finalPath.StartsWith("Assets"))
+                string ext = Path.GetExtension(finalPath);
+                if (string.IsNullOrEmpty(ext)) ext = ".png";
+                string baseName = Path.GetFileNameWithoutExtension(finalPath);
+                string absoluteFilePath = Path.Combine(absoluteDir, baseName + ext);
+
+                int counter = 1;
+                while (File.Exists(absoluteFilePath))
                 {
-                    absoluteFilePath = Path.Combine(Application.dataPath, "..", finalPath);
+                    absoluteFilePath = Path.Combine(absoluteDir, $"{baseName}_{counter}{ext}");
+                    finalPath = Path.Combine(targetDir, $"{baseName}_{counter}{ext}").Replace("\\", "/");
+                    counter++;
                 }
 
                 Debug.Log($"[Omnisense-ImageGen] Writing {imageBytes.Length} bytes to file: {absoluteFilePath}");

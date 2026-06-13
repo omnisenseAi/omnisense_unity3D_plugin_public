@@ -1118,8 +1118,7 @@ namespace Omnisense
 
             // Construct new path inside target output directory
             string baseName = Path.GetFileNameWithoutExtension(sourcePath);
-            string fileName = $"{baseName}_cropped.png";
-            string relativePath = Path.Combine(outputFolder, fileName).Replace("\\", "/");
+            string ext = ".png";
             
             string absoluteOutDir = outputFolder;
             if (outputFolder.StartsWith("Assets"))
@@ -1130,7 +1129,18 @@ namespace Omnisense
             {
                 Directory.CreateDirectory(absoluteOutDir);
             }
-            string absolutePath = Path.Combine(absoluteOutDir, fileName);
+
+            string targetFileName = $"{baseName}_cropped";
+            string absolutePath = Path.Combine(absoluteOutDir, targetFileName + ext);
+            string relativePath = Path.Combine(outputFolder, targetFileName + ext).Replace("\\", "/");
+
+            int counter = 1;
+            while (File.Exists(absolutePath))
+            {
+                absolutePath = Path.Combine(absoluteOutDir, $"{targetFileName}_{counter}{ext}");
+                relativePath = Path.Combine(outputFolder, $"{targetFileName}_{counter}{ext}").Replace("\\", "/");
+                counter++;
+            }
 
             Debug.Log($"[Omnisense-ImgEditor] Creating cropped copy at: {absolutePath}");
             File.WriteAllBytes(absolutePath, bytes);
@@ -1208,9 +1218,8 @@ namespace Omnisense
 
             // Construct new path inside target output directory
             string baseName = Path.GetFileNameWithoutExtension(sourcePath);
-            string fileName = $"{baseName}_resized.png";
-            string relativePath = Path.Combine(outputFolder, fileName).Replace("\\", "/");
-            
+            string ext = ".png";
+
             string absoluteOutDir = outputFolder;
             if (outputFolder.StartsWith("Assets"))
             {
@@ -1220,7 +1229,18 @@ namespace Omnisense
             {
                 Directory.CreateDirectory(absoluteOutDir);
             }
-            string absolutePath = Path.Combine(absoluteOutDir, fileName);
+
+            string targetFileName = $"{baseName}_resized";
+            string absolutePath = Path.Combine(absoluteOutDir, targetFileName + ext);
+            string relativePath = Path.Combine(outputFolder, targetFileName + ext).Replace("\\", "/");
+
+            int counter = 1;
+            while (File.Exists(absolutePath))
+            {
+                absolutePath = Path.Combine(absoluteOutDir, $"{targetFileName}_{counter}{ext}");
+                relativePath = Path.Combine(outputFolder, $"{targetFileName}_{counter}{ext}").Replace("\\", "/");
+                counter++;
+            }
 
             Debug.Log($"[Omnisense-ImgEditor] Creating scaled copy at: {absolutePath}");
             File.WriteAllBytes(absolutePath, bytes);
@@ -1284,6 +1304,21 @@ namespace Omnisense
             List<string> generatedPaths = new List<string>();
             int index = 0;
 
+            string ext = ".png";
+            string baseSliceName = $"{baseName}_slice";
+            int batchCounter = 0;
+            bool conflict = false;
+            do
+            {
+                conflict = false;
+                string testFileName = batchCounter == 0 ? $"{baseSliceName}_0{ext}" : $"{baseSliceName}_{batchCounter}_0{ext}";
+                if (File.Exists(Path.Combine(absoluteOutDir, testFileName)))
+                {
+                    conflict = true;
+                    batchCounter++;
+                }
+            } while (conflict);
+
             for (int y = texHeight - sliceHeight; y >= 0; y -= sliceHeight)
             {
                 for (int x = 0; x < texWidth; x += sliceWidth)
@@ -1299,7 +1334,7 @@ namespace Omnisense
                     byte[] pngBytes = cellTex.EncodeToPNG();
                     UnityEngine.Object.DestroyImmediate(cellTex);
 
-                    string fileName = $"{baseName}_slice_{index++}.png";
+                    string fileName = batchCounter == 0 ? $"{baseSliceName}_{index++}{ext}" : $"{baseSliceName}_{batchCounter}_{index++}{ext}";
                     string relativePath = Path.Combine(outputFolder, fileName).Replace("\\", "/");
                     string absolutePath = Path.Combine(absoluteOutDir, fileName);
 

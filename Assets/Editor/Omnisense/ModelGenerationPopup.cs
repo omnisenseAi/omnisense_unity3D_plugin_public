@@ -502,10 +502,17 @@ namespace Omnisense
                     Directory.CreateDirectory(absoluteDir);
                 }
 
-                string absoluteFilePath = finalPath;
-                if (finalPath.StartsWith("Assets"))
+                string ext = Path.GetExtension(finalPath);
+                if (string.IsNullOrEmpty(ext)) ext = ".js";
+                string baseName = Path.GetFileNameWithoutExtension(finalPath);
+                string absoluteFilePath = Path.Combine(absoluteDir, baseName + ext);
+
+                int counter = 1;
+                while (File.Exists(absoluteFilePath))
                 {
-                    absoluteFilePath = Path.Combine(Application.dataPath, "..", finalPath);
+                    absoluteFilePath = Path.Combine(absoluteDir, $"{baseName}_{counter}{ext}");
+                    finalPath = Path.Combine(targetDir, $"{baseName}_{counter}{ext}").Replace("\\", "/");
+                    counter++;
                 }
 
                 File.WriteAllText(absoluteFilePath, code);
@@ -772,10 +779,17 @@ namespace Omnisense
                     Directory.CreateDirectory(absoluteDir);
                 }
 
-                string absoluteFilePath = finalPath;
-                if (finalPath.StartsWith("Assets"))
+                string ext = Path.GetExtension(finalPath);
+                if (string.IsNullOrEmpty(ext)) ext = "." + format;
+                string baseName = Path.GetFileNameWithoutExtension(finalPath);
+                string absoluteFilePath = Path.Combine(absoluteDir, baseName + ext);
+
+                int counter = 1;
+                while (File.Exists(absoluteFilePath))
                 {
-                    absoluteFilePath = Path.Combine(Application.dataPath, "..", finalPath);
+                    absoluteFilePath = Path.Combine(absoluteDir, $"{baseName}_{counter}{ext}");
+                    finalPath = Path.Combine(targetDir, $"{baseName}_{counter}{ext}").Replace("\\", "/");
+                    counter++;
                 }
 
                 File.WriteAllBytes(absoluteFilePath, bytes);
@@ -814,6 +828,29 @@ namespace Omnisense
             string filename = Path.GetFileNameWithoutExtension(jsPath);
             string gltfPath = targetDir + filename + ".gltf";
 
+            string absoluteDir = targetDir;
+            if (targetDir.StartsWith("Assets"))
+            {
+                absoluteDir = Path.Combine(Application.dataPath, "..", targetDir);
+            }
+
+            if (!Directory.Exists(absoluteDir))
+            {
+                Directory.CreateDirectory(absoluteDir);
+            }
+
+            string ext = ".gltf";
+            string baseName = filename;
+            string absoluteGltfPath = Path.Combine(absoluteDir, baseName + ext);
+
+            int counter = 1;
+            while (File.Exists(absoluteGltfPath))
+            {
+                absoluteGltfPath = Path.Combine(absoluteDir, $"{baseName}_{counter}{ext}");
+                gltfPath = Path.Combine(targetDir, $"{baseName}_{counter}{ext}").Replace("\\", "/");
+                counter++;
+            }
+
             SetLoadingState(true);
             _convertBtn.SetEnabled(false);
             ShowStatus("Converting Three.js model to glTF...");
@@ -822,7 +859,6 @@ namespace Omnisense
             EnsureNodeDependencies();
 
             string absoluteJsPath = jsPath.StartsWith("Assets") ? Path.Combine(Application.dataPath, "..", jsPath) : jsPath;
-            string absoluteGltfPath = gltfPath.StartsWith("Assets") ? Path.Combine(Application.dataPath, "..", gltfPath) : gltfPath;
 
             ConvertThreeJsToGltf(absoluteJsPath, absoluteGltfPath, (success, result) => {
                 SetLoadingState(false);
