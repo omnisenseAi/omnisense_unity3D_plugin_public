@@ -521,6 +521,27 @@ namespace Omnisense
 
                 _jsFileField.value = finalPath;
                 ShowSuccess($"Three.js code generated and saved successfully at:\n{finalPath}");
+
+                string absoluteGltfPath = Path.ChangeExtension(absoluteFilePath, ".gltf");
+                string gltfPath = Path.ChangeExtension(finalPath, ".gltf").Replace("\\", "/");
+
+                SetLoadingState(true);
+                ShowStatus("Three.js code saved. Converting to glTF...");
+                EnsureNodeDependencies();
+
+                ConvertThreeJsToGltf(absoluteFilePath, absoluteGltfPath, (success, result) => {
+                    SetLoadingState(false);
+                    if (success)
+                    {
+                        AssetDatabase.ImportAsset(gltfPath);
+                        AssetDatabase.Refresh();
+                        ShowSuccess($"Three.js code generated and successfully converted to glTF at:\n{gltfPath}");
+                    }
+                    else
+                    {
+                        ShowError($"Three.js code saved, but glTF Conversion Failed:\n{result}");
+                    }
+                });
             }
             catch (Exception ex)
             {
