@@ -24,36 +24,42 @@ namespace Omnisense
 {
     /// <summary>
     /// CORE PHILOSOPHY & DESIGN DECISION:
-    /// The ModelGenerationPopup serves as a two-fold AI 3D asset generation and conversion suite.
+    /// The ModelGenerationPopup serves as a stateful, interactive AI 3D Model Chat Workspace.
     /// 
     /// WHY:
-    /// Game development relies heavily on 3D assets, but generating 3D models directly inside the editor usually
-    /// requires either complex offline assets pipeline or expensive, heavy native plugins. By integrating:
-    ///   1. Procedural Three.js Code Generation (LLM-driven): Let standard LLMs draft a Three.js scene script.
-    ///   2. Headless Node.js to glTF conversion: Decouples rendering and conversion outside Assets/ to avoid
-    ///      Unity Asset Database import lags and warnings (by running node/npm from the UserSettings/ folder).
-    ///   3. Text-to-3D APIs (Meshy/Tripo3D): Utilizes cloud services that output production-ready .glb files.
-    /// This hybrid model lets developers rapidly prototype geometries without bloating the Git repository or project compile times.
-    /// 
-    /// HOW:
-    /// The popup uses UnityWebRequest for asynchronous polling of Meshy & Tripo tasks, handles file selection interfaces,
-    /// and spawns a background 'node' process to compile Javascript scenes into standalone glTF files.
+    /// Creating low-poly models, textures, or procedural geometry usually requires complex external pipelines.
+    /// Structuring this as a Visual Chat Workspace with persistent thread history:
+    ///   1. Dialogue Context: Enables iterating on previous geometries and materials in natural language (e.g. "Add a lock to the chest").
+    ///   2. Multimodal References: Let developers drop concept sketches to guide both cloud text-to-3d prompts and Three.js logic.
+    ///   3. Instantiate Scene Helper: Directly injects generated glTF/glb prefabs into the Unity Editor's open scene hierarchy.
     /// </summary>
     public class ModelGenerationPopup : EditorWindow
     {
+        private VisualElement _sidebarPanel;
+        private ScrollView _chatHistoryContainer;
+        private ScrollView _chatViewport;
         private TextField _promptField;
+        private Button _generateBtn;
+        private Button _attachBtn;
+        private Label _statusLabel;
+
+        // Reference image attachment fields
+        private VisualElement _attachmentContainer;
+        private Image _attachmentThumbnail;
+        private Label _attachmentLabel;
+        private string _selectedReferencePath = "";
+
+        // Settings and converter controls
         private DropdownField _providerField;
         private DropdownField _modelSelector;
         private TextField _pathField;
-        private Button _generateBtn;
-        private Label _statusLabel;
-        
-        // Converter fields
         private TextField _jsFileField;
         private Button _convertBtn;
 
+        // Networking requests
         private UnityWebRequest _activeRequest;
         private double _requestStartTime;
+        private string _pendingExplanation = "";
 
         // Polling states for 3D APIs
         private string _taskId = "";
@@ -61,13 +67,16 @@ namespace Omnisense
         private double _lastPollTime = 0;
         private int _pollAttempts = 0;
 
+        // Chat session state
+        private ModelChatSession _activeSession;
+        private List<ModelChatSession> _sessions = new List<ModelChatSession>();
+
         [MenuItem("Omnisense/3D Model Generator")]
         [MenuItem("Window/Omnisense/3D Model Generator")]
         public static void Open()
         {
-            var window = GetWindow<ModelGenerationPopup>(true, "🧊 AI 3D Model Generator", true);
-            window.minSize = new Vector2(420, 640);
-            window.maxSize = new Vector2(420, 640);
+            var window = GetWindow<ModelGenerationPopup>(true, "🧊 AI 3D Model Chat Workspace", true);
+            window.minSize = new Vector2(650, 580);
             window.Show();
         }
 
@@ -75,6 +84,7 @@ namespace Omnisense
         {
             BuildUI();
             EnsureNodeDependencies();
+            LoadLastOrNewSession();
         }
 
         private void OnDisable()
@@ -82,6 +92,7 @@ namespace Omnisense
             EditorApplication.update -= CheckThreeJsRequestProgress;
             EditorApplication.update -= CheckMeshyRequestProgress;
             EditorApplication.update -= CheckTripoRequestProgress;
+            EditorApplication.update -= CheckLlmOrchestratorProgress;
             EditorApplication.update -= PollTaskStatus;
         }
 
@@ -90,118 +101,133 @@ namespace Omnisense
             var root = rootVisualElement;
             root.Clear();
             root.style.backgroundColor = new StyleColor(new Color(0.17f, 0.18f, 0.2f));
+            root.style.flexDirection = FlexDirection.Row;
 
-            var scroll = new ScrollView();
-            scroll.style.flexGrow = 1;
-            scroll.style.paddingLeft = 15;
-            scroll.style.paddingRight = 15;
-            scroll.style.paddingTop = 15;
-            scroll.style.paddingBottom = 15;
-            root.Add(scroll);
+            // 1. LEFT SIDEBAR (Model Chat History Threads)
+            _sidebarPanel = new VisualElement();
+            _sidebarPanel.style.width = 180;
+            _sidebarPanel.style.minWidth = 180;
+            _sidebarPanel.style.backgroundColor = new StyleColor(new Color(0.12f, 0.13f, 0.15f));
+            _sidebarPanel.style.borderRightWidth = 1;
+            _sidebarPanel.style.borderRightColor = new StyleColor(new Color(0.25f, 0.25f, 0.25f));
+            _sidebarPanel.style.paddingLeft = 8;
+            _sidebarPanel.style.paddingRight = 8;
+            _sidebarPanel.style.paddingTop = 8;
+            _sidebarPanel.style.paddingBottom = 8;
 
-            // Title Header
-            var header = new Label("🧊 AI 3D Model Generator");
-            header.style.unityFontStyleAndWeight = FontStyle.Bold;
-            header.style.fontSize = 16;
-            header.style.color = new StyleColor(new Color(0.9f, 0.9f, 0.9f));
-            header.style.marginBottom = 15;
-            header.style.alignSelf = Align.Center;
-            scroll.Add(header);
+            var newChatBtn = new Button(CreateNewChat) { text = "➕ New Model Chat" };
+            newChatBtn.style.height = 28;
+            newChatBtn.style.marginBottom = 10;
+            newChatBtn.style.backgroundColor = new StyleColor(new Color(0.15f, 0.45f, 0.25f));
+            newChatBtn.style.color = new StyleColor(Color.white);
+            newChatBtn.style.unityFontStyleAndWeight = FontStyle.Bold;
+            newChatBtn.style.borderTopLeftRadius = 4;
+            newChatBtn.style.borderTopRightRadius = 4;
+            newChatBtn.style.borderBottomLeftRadius = 4;
+            newChatBtn.style.borderBottomRightRadius = 4;
+            _sidebarPanel.Add(newChatBtn);
 
-            // Prompt Area
-            var promptContainer = new VisualElement();
-            promptContainer.style.marginBottom = 12;
-            var promptLabel = new Label("Prompt:");
-            promptLabel.style.unityFontStyleAndWeight = FontStyle.Bold;
-            promptLabel.style.marginBottom = 4;
-            promptLabel.style.color = new StyleColor(new Color(0.8f, 0.8f, 0.8f));
-            _promptField = new TextField { multiline = true };
-            _promptField.style.minHeight = 60;
-            _promptField.style.maxHeight = 100;
-            _promptField.style.whiteSpace = WhiteSpace.Normal;
-            _promptField.value = "";
-            var promptInputEl = _promptField.Q("unity-text-input");
-            if (promptInputEl != null)
-            {
-                promptInputEl.style.backgroundColor = new StyleColor(new Color(0.1f, 0.1f, 0.12f));
-                promptInputEl.style.borderLeftColor = new StyleColor(new Color(0.25f, 0.25f, 0.28f));
-                promptInputEl.style.borderRightColor = new StyleColor(new Color(0.25f, 0.25f, 0.28f));
-                promptInputEl.style.borderTopColor = new StyleColor(new Color(0.25f, 0.25f, 0.28f));
-                promptInputEl.style.borderBottomColor = new StyleColor(new Color(0.25f, 0.25f, 0.28f));
-                promptInputEl.style.color = new StyleColor(new Color(0.85f, 0.85f, 0.85f));
-            }
-            promptContainer.Add(promptLabel);
-            promptContainer.Add(_promptField);
-            scroll.Add(promptContainer);
+            var historyLabel = new Label("Recent Model Chats:");
+            historyLabel.style.unityFontStyleAndWeight = FontStyle.Bold;
+            historyLabel.style.color = new StyleColor(new Color(0.7f, 0.7f, 0.7f));
+            historyLabel.style.fontSize = 11;
+            historyLabel.style.marginBottom = 5;
+            _sidebarPanel.Add(historyLabel);
 
-            // Provider
-            var providerContainer = new VisualElement();
-            providerContainer.style.marginBottom = 12;
-            var providerLabel = new Label("AI Provider:");
-            providerLabel.style.unityFontStyleAndWeight = FontStyle.Bold;
-            providerLabel.style.marginBottom = 4;
-            providerLabel.style.color = new StyleColor(new Color(0.8f, 0.8f, 0.8f));
-            _providerField = new DropdownField();
-            _providerField.choices = new List<string> {
-                "Three.js Code Generator", "Meshy AI", "Tripo3D"
-            };
-            _providerField.value = "Three.js Code Generator";
-            providerContainer.Add(providerLabel);
+            _chatHistoryContainer = new ScrollView();
+            _chatHistoryContainer.style.flexGrow = 1;
+            _sidebarPanel.Add(_chatHistoryContainer);
+
+            root.Add(_sidebarPanel);
+
+            // 2. RIGHT WORKSPACE (Chat Panel & Output Settings)
+            var workspace = new VisualElement();
+            workspace.style.flexGrow = 1;
+            workspace.style.paddingLeft = 12;
+            workspace.style.paddingRight = 12;
+            workspace.style.paddingTop = 12;
+            workspace.style.paddingBottom = 12;
+            workspace.style.flexDirection = FlexDirection.Column;
+
+            var chatHeader = new Label("🧊 AI 3D Model Chat Workspace");
+            chatHeader.style.unityFontStyleAndWeight = FontStyle.Bold;
+            chatHeader.style.fontSize = 15;
+            chatHeader.style.color = new StyleColor(new Color(0.9f, 0.9f, 0.9f));
+            chatHeader.style.marginBottom = 8;
+            workspace.Add(chatHeader);
+
+            _chatViewport = new ScrollView();
+            _chatViewport.style.flexGrow = 1;
+            _chatViewport.style.marginBottom = 8;
+            _chatViewport.style.backgroundColor = new StyleColor(new Color(0.14f, 0.15f, 0.17f));
+            _chatViewport.style.paddingLeft = 6;
+            _chatViewport.style.paddingRight = 6;
+            _chatViewport.style.paddingTop = 6;
+            _chatViewport.style.paddingBottom = 6;
+            _chatViewport.style.borderTopLeftRadius = 6;
+            _chatViewport.style.borderTopRightRadius = 6;
+            _chatViewport.style.borderBottomLeftRadius = 6;
+            _chatViewport.style.borderBottomRightRadius = 6;
+            workspace.Add(_chatViewport);
+
+            // Settings Foldout (Drawer)
+            var settingsFoldout = new Foldout();
+            settingsFoldout.value = false;
+            settingsFoldout.text = "⚙ Generation Parameters";
+            settingsFoldout.style.backgroundColor = new StyleColor(new Color(0.14f, 0.15f, 0.17f));
+            settingsFoldout.style.paddingLeft = 6;
+            settingsFoldout.style.paddingRight = 6;
+            settingsFoldout.style.paddingTop = 6;
+            settingsFoldout.style.paddingBottom = 6;
+            settingsFoldout.style.marginBottom = 6;
+            settingsFoldout.style.borderTopLeftRadius = 4;
+            settingsFoldout.style.borderTopRightRadius = 4;
+            settingsFoldout.style.borderBottomLeftRadius = 4;
+            settingsFoldout.style.borderBottomRightRadius = 4;
+
+            var dropdownsRow = new VisualElement();
+            dropdownsRow.style.flexDirection = FlexDirection.Row;
+            dropdownsRow.style.justifyContent = Justify.SpaceBetween;
+            dropdownsRow.style.marginBottom = 6;
+
+            var providerContainer = new VisualElement { style = { width = Length.Percent(48) } };
+            providerContainer.Add(new Label("AI Provider:") { style = { unityFontStyleAndWeight = FontStyle.Bold, color = new StyleColor(new Color(0.8f, 0.8f, 0.8f)), fontSize = 10 } });
+            _providerField = new DropdownField { choices = new List<string> { "Three.js Code Generator", "Meshy AI", "Tripo3D" }, value = "Three.js Code Generator" };
             providerContainer.Add(_providerField);
-            scroll.Add(providerContainer);
+            dropdownsRow.Add(providerContainer);
 
-            // Model Selection for Three.js (dynamic display)
-            var modelContainer = new VisualElement();
-            modelContainer.style.marginBottom = 12;
-            var modelLabel = new Label("LLM Model (Three.js only):");
-            modelLabel.style.unityFontStyleAndWeight = FontStyle.Bold;
-            modelLabel.style.marginBottom = 4;
-            modelLabel.style.color = new StyleColor(new Color(0.8f, 0.8f, 0.8f));
-            _modelSelector = new DropdownField();
-            _modelSelector.choices = new List<string> {
-                "gpt-5.5", "gpt-5.4-mini", "o3-mini",
-                "claude-4.7-opus", "claude-4.6-sonnet", "claude-4.5-haiku",
-                "gemini-3.1-pro", "gemini-3.1-flash", "gemini-3.1-flash-lite",
-                "grok-4.3-beta", "grok-4.20-beta-2", "grok-4.20-fast",
-                "self-hosted"
+            var modelContainer = new VisualElement { style = { width = Length.Percent(48) } };
+            var modelLabel = new Label("LLM Model:") { style = { unityFontStyleAndWeight = FontStyle.Bold, color = new StyleColor(new Color(0.8f, 0.8f, 0.8f)), fontSize = 10 } };
+            _modelSelector = new DropdownField {
+                choices = new List<string> {
+                    "gpt-5.5", "gpt-5.4-mini", "o3-mini",
+                    "claude-4.7-opus", "claude-4.6-sonnet", "claude-4.5-haiku",
+                    "gemini-3.1-pro", "gemini-3.1-flash", "gemini-3.1-flash-lite",
+                    "grok-4.3-beta", "grok-4.20-beta-2", "grok-4.20-fast",
+                    "self-hosted"
+                }
             };
-            string savedModel = EditorPrefs.GetString("Omnisense_SelectedModel", "gpt-5.5");
+            string savedModel = EditorPrefs.GetString("Omnisense_SelectedModel", "gpt-5.4-mini");
             if (_modelSelector.choices.Contains(savedModel)) _modelSelector.value = savedModel;
-            else _modelSelector.value = "gpt-5.5";
+            else _modelSelector.value = "gpt-5.4-mini";
             _modelSelector.RegisterValueChangedCallback(evt => {
                 EditorPrefs.SetString("Omnisense_SelectedModel", evt.newValue);
             });
             modelContainer.Add(modelLabel);
             modelContainer.Add(_modelSelector);
-            scroll.Add(modelContainer);
+            dropdownsRow.Add(modelContainer);
 
-            _providerField.RegisterValueChangedCallback(evt => {
-                modelContainer.style.display = (evt.newValue == "Three.js Code Generator") ? DisplayStyle.Flex : DisplayStyle.None;
-            });
-            modelContainer.style.display = (_providerField.value == "Three.js Code Generator") ? DisplayStyle.Flex : DisplayStyle.None;
+            settingsFoldout.Add(dropdownsRow);
 
-            // Target Storage Path
+            // Path & Conversion settings row
             var pathContainer = new VisualElement();
-            pathContainer.style.marginBottom = 12;
-            var pathLabel = new Label("Save Location:");
-            pathLabel.style.unityFontStyleAndWeight = FontStyle.Bold;
-            pathLabel.style.marginBottom = 4;
-            pathLabel.style.color = new StyleColor(new Color(0.8f, 0.8f, 0.8f));
-
-            var pathRow = new VisualElement();
-            pathRow.style.flexDirection = FlexDirection.Row;
-            pathRow.style.alignItems = Align.Center;
-
-            _pathField = new TextField();
-            _pathField.value = PlayerPrefs.GetString("model_generation_save_location", "Assets/");
-            _pathField.style.flexGrow = 1;
-            var pathInput = _pathField.Q("unity-text-input");
-            if (pathInput != null) pathInput.style.backgroundColor = new StyleColor(new Color(0.1f, 0.1f, 0.12f));
+            pathContainer.Add(new Label("Save Location:") { style = { unityFontStyleAndWeight = FontStyle.Bold, color = new StyleColor(new Color(0.8f, 0.8f, 0.8f)), fontSize = 10 } });
+            var pathRow = new VisualElement { style = { flexDirection = FlexDirection.Row, alignItems = Align.Center } };
+            _pathField = new TextField { value = PlayerPrefs.GetString("model_generation_save_location", "Assets/"), style = { flexGrow = 1 } };
             _pathField.RegisterValueChangedCallback(evt => {
                 PlayerPrefs.SetString("model_generation_save_location", evt.newValue);
                 PlayerPrefs.Save();
             });
-
             var browseBtn = new Button(() => {
                 string selectedFolder = EditorUtility.OpenFolderPanel("Select Output Directory", "Assets", "");
                 if (!string.IsNullOrEmpty(selectedFolder))
@@ -213,232 +239,684 @@ namespace Omnisense
                     _pathField.value = selectedFolder;
                 }
             }) { text = "..." };
-            browseBtn.style.marginLeft = 5;
-            browseBtn.style.width = 30;
-            browseBtn.style.backgroundColor = new StyleColor(new Color(0.25f, 0.27f, 0.3f));
-            browseBtn.style.color = new StyleColor(Color.white);
-
+            browseBtn.style.width = 22;
+            browseBtn.style.marginLeft = 3;
             pathRow.Add(_pathField);
             pathRow.Add(browseBtn);
-            pathContainer.Add(pathLabel);
             pathContainer.Add(pathRow);
-            scroll.Add(pathContainer);
+            settingsFoldout.Add(pathContainer);
 
-            // Status Label
-            _statusLabel = new Label("");
-            _statusLabel.style.color = new StyleColor(new Color(0.7f, 0.7f, 0.7f));
-            _statusLabel.style.fontSize = 11;
-            _statusLabel.style.whiteSpace = WhiteSpace.Normal;
-            _statusLabel.style.marginBottom = 10;
-            _statusLabel.style.minHeight = 25;
-            _statusLabel.style.alignSelf = Align.Center;
-            scroll.Add(_statusLabel);
+            // Manual THREE.js to glTF Converter section inside parameters folder
+            var manualSection = new Foldout { text = "Manual THREE.js to glTF Converter", value = false, style = { marginTop = 8 } };
+            var manualRow = new VisualElement { style = { flexDirection = FlexDirection.Row, alignItems = Align.Center, marginTop = 4 } };
+            _jsFileField = new TextField { style = { flexGrow = 1 } };
+            var manualBrowse = new Button(() => {
+                string file = EditorUtility.OpenFilePanel("Select THREE.js Script", "Assets", "js");
+                if (!string.IsNullOrEmpty(file))
+                {
+                    if (file.StartsWith(Application.dataPath)) file = "Assets" + file.Substring(Application.dataPath.Length);
+                    _jsFileField.value = file;
+                }
+            }) { text = "..." };
+            manualBrowse.style.width = 22;
+            manualBrowse.style.marginLeft = 3;
+            manualRow.Add(_jsFileField);
+            manualRow.Add(manualBrowse);
+            manualSection.Add(manualRow);
 
-            // Generate Button
-            _generateBtn = new Button(OnGenerateClicked) { text = "Generate 3D Model" };
-            _generateBtn.style.height = 36;
-            _generateBtn.style.fontSize = 13;
+            _convertBtn = new Button(OnConvertClicked) { text = "Convert JS file" };
+            _convertBtn.style.marginTop = 4;
+            _convertBtn.style.backgroundColor = new StyleColor(new Color(0.2f, 0.44f, 0.68f));
+            _convertBtn.style.color = new StyleColor(Color.white);
+            manualSection.Add(_convertBtn);
+
+            settingsFoldout.Add(manualSection);
+            workspace.Add(settingsFoldout);
+
+            // Reference attachment zone
+            _attachmentContainer = new VisualElement();
+            _attachmentContainer.style.flexDirection = FlexDirection.Row;
+            _attachmentContainer.style.alignItems = Align.Center;
+            _attachmentContainer.style.paddingLeft = 6;
+            _attachmentContainer.style.paddingRight = 6;
+            _attachmentContainer.style.paddingTop = 4;
+            _attachmentContainer.style.paddingBottom = 4;
+            _attachmentContainer.style.marginBottom = 6;
+            _attachmentContainer.style.backgroundColor = new StyleColor(new Color(0.14f, 0.15f, 0.17f));
+            _attachmentContainer.style.borderTopLeftRadius = 4;
+            _attachmentContainer.style.borderTopRightRadius = 4;
+            _attachmentContainer.style.borderBottomLeftRadius = 4;
+            _attachmentContainer.style.borderBottomRightRadius = 4;
+            _attachmentContainer.style.display = DisplayStyle.None;
+
+            _attachmentThumbnail = new Image { style = { width = 30, height = 30, marginRight = 6 } };
+            _attachmentLabel = new Label("") { style = { flexGrow = 1, fontSize = 10, color = new StyleColor(new Color(0.8f, 0.8f, 0.8f)) } };
+            var removeAttachmentBtn = new Button(RemoveAttachment) { text = "❌" };
+            removeAttachmentBtn.style.width = 20;
+            removeAttachmentBtn.style.height = 20;
+            removeAttachmentBtn.style.backgroundColor = new StyleColor(Color.clear);
+            removeAttachmentBtn.style.borderLeftWidth = 0;
+            removeAttachmentBtn.style.borderRightWidth = 0;
+            removeAttachmentBtn.style.borderTopWidth = 0;
+            removeAttachmentBtn.style.borderBottomWidth = 0;
+            removeAttachmentBtn.style.color = new StyleColor(new Color(0.9f, 0.4f, 0.4f));
+
+            _attachmentContainer.Add(_attachmentThumbnail);
+            _attachmentContainer.Add(_attachmentLabel);
+            _attachmentContainer.Add(removeAttachmentBtn);
+            workspace.Add(_attachmentContainer);
+
+            _statusLabel = new Label("Ready to design 3D models...");
+            _statusLabel.style.color = new StyleColor(new Color(0.6f, 0.6f, 0.6f));
+            _statusLabel.style.fontSize = 10;
+            _statusLabel.style.marginBottom = 4;
+            workspace.Add(_statusLabel);
+
+            // Bottom Input row
+            var chatInputRow = new VisualElement();
+            chatInputRow.style.flexDirection = FlexDirection.Row;
+            chatInputRow.style.alignItems = Align.Center;
+
+            _attachBtn = new Button(OnAttachClicked) { text = "📎" };
+            _attachBtn.style.height = 35;
+            _attachBtn.style.width = 30;
+            _attachBtn.style.marginRight = 6;
+            _attachBtn.style.fontSize = 14;
+            _attachBtn.style.unityFontStyleAndWeight = FontStyle.Bold;
+            _attachBtn.style.backgroundColor = new StyleColor(new Color(0.25f, 0.27f, 0.3f));
+            _attachBtn.style.color = new StyleColor(Color.white);
+            _attachBtn.style.borderTopLeftRadius = 4;
+            _attachBtn.style.borderTopRightRadius = 4;
+            _attachBtn.style.borderBottomLeftRadius = 4;
+            _attachBtn.style.borderBottomRightRadius = 4;
+            _attachBtn.style.borderLeftWidth = 0;
+            _attachBtn.style.borderRightWidth = 0;
+            _attachBtn.style.borderTopWidth = 0;
+            _attachBtn.style.borderBottomWidth = 0;
+            chatInputRow.Add(_attachBtn);
+
+            _promptField = new TextField { multiline = true };
+            _promptField.style.flexGrow = 1;
+            _promptField.style.minHeight = 35;
+            _promptField.style.maxHeight = 60;
+            var promptInputEl = _promptField.Q("unity-text-input");
+            if (promptInputEl != null)
+            {
+                promptInputEl.style.backgroundColor = new StyleColor(new Color(0.1f, 0.1f, 0.12f));
+                promptInputEl.style.color = new StyleColor(new Color(0.85f, 0.85f, 0.85f));
+            }
+            chatInputRow.Add(_promptField);
+
+            _generateBtn = new Button(OnSendClicked) { text = "Send" };
+            _generateBtn.style.height = 35;
+            _generateBtn.style.marginLeft = 6;
+            _generateBtn.style.width = 65;
             _generateBtn.style.unityFontStyleAndWeight = FontStyle.Bold;
             _generateBtn.style.backgroundColor = new StyleColor(new Color(0.0f, 0.48f, 0.8f));
             _generateBtn.style.color = new StyleColor(Color.white);
-            _generateBtn.style.borderTopLeftRadius = 6;
-            _generateBtn.style.borderTopRightRadius = 6;
-            _generateBtn.style.borderBottomLeftRadius = 6;
-            _generateBtn.style.borderBottomRightRadius = 6;
+            _generateBtn.style.borderTopLeftRadius = 4;
+            _generateBtn.style.borderTopRightRadius = 4;
+            _generateBtn.style.borderBottomLeftRadius = 4;
+            _generateBtn.style.borderBottomRightRadius = 4;
             _generateBtn.style.borderLeftWidth = 0;
             _generateBtn.style.borderRightWidth = 0;
             _generateBtn.style.borderTopWidth = 0;
             _generateBtn.style.borderBottomWidth = 0;
-            scroll.Add(_generateBtn);
+            chatInputRow.Add(_generateBtn);
 
-            // Three.js to glTF Converter Section
-            var converterContainer = new VisualElement();
-            converterContainer.style.marginTop = 15;
-            converterContainer.style.borderTopWidth = 1;
-            converterContainer.style.borderTopColor = new StyleColor(new Color(0.3f, 0.3f, 0.3f, 0.5f));
-            converterContainer.style.paddingTop = 15;
+            workspace.Add(chatInputRow);
 
-            var converterTitle = new Label("Three.js to glTF Converter");
-            converterTitle.style.unityFontStyleAndWeight = FontStyle.Bold;
-            converterTitle.style.fontSize = 13;
-            converterTitle.style.color = new StyleColor(new Color(0.9f, 0.9f, 0.9f));
-            converterTitle.style.marginBottom = 10;
-            converterContainer.Add(converterTitle);
+            root.Add(workspace);
 
-            var jsPathLabel = new Label("Select Three.js File:");
-            jsPathLabel.style.unityFontStyleAndWeight = FontStyle.Bold;
-            jsPathLabel.style.marginBottom = 4;
-            jsPathLabel.style.color = new StyleColor(new Color(0.8f, 0.8f, 0.8f));
-            converterContainer.Add(jsPathLabel);
-
-            var jsPathRow = new VisualElement();
-            jsPathRow.style.flexDirection = FlexDirection.Row;
-            jsPathRow.style.alignItems = Align.Center;
-
-            _jsFileField = new TextField();
-            _jsFileField.value = "";
-            _jsFileField.style.flexGrow = 1;
-            var jsFileInput = _jsFileField.Q("unity-text-input");
-            if (jsFileInput != null) jsFileInput.style.backgroundColor = new StyleColor(new Color(0.1f, 0.1f, 0.12f));
-
-            var jsBrowseBtn = new Button(() => {
-                string selectedFile = EditorUtility.OpenFilePanel("Select Three.js File", "Assets", "js");
-                if (!string.IsNullOrEmpty(selectedFile))
-                {
-                    if (selectedFile.StartsWith(Application.dataPath))
-                    {
-                        selectedFile = "Assets" + selectedFile.Substring(Application.dataPath.Length);
-                    }
-                    _jsFileField.value = selectedFile;
-                }
-            }) { text = "..." };
-            jsBrowseBtn.style.marginLeft = 5;
-            jsBrowseBtn.style.width = 30;
-            jsBrowseBtn.style.backgroundColor = new StyleColor(new Color(0.25f, 0.27f, 0.3f));
-            jsBrowseBtn.style.color = new StyleColor(Color.white);
-
-            jsPathRow.Add(_jsFileField);
-            jsPathRow.Add(jsBrowseBtn);
-            converterContainer.Add(jsPathRow);
-
-            // Convert Button
-            _convertBtn = new Button(OnConvertClicked) { text = "Convert JS to glTF" };
-            _convertBtn.style.marginTop = 10;
-            _convertBtn.style.height = 30;
-            _convertBtn.style.fontSize = 12;
-            _convertBtn.style.unityFontStyleAndWeight = FontStyle.Bold;
-            _convertBtn.style.backgroundColor = new StyleColor(new Color(0.2f, 0.44f, 0.68f));
-            _convertBtn.style.color = new StyleColor(Color.white);
-            _convertBtn.style.borderTopLeftRadius = 4;
-            _convertBtn.style.borderTopRightRadius = 4;
-            _convertBtn.style.borderBottomLeftRadius = 4;
-            _convertBtn.style.borderBottomRightRadius = 4;
-            _convertBtn.style.borderLeftWidth = 0;
-            _convertBtn.style.borderRightWidth = 0;
-            _convertBtn.style.borderTopWidth = 0;
-            _convertBtn.style.borderBottomWidth = 0;
-            converterContainer.Add(_convertBtn);
-
-            scroll.Add(converterContainer);
+            // Register drag & drop globally on the right panel
+            workspace.RegisterCallback<DragUpdatedEvent>(evt => {
+                DragAndDrop.visualMode = DragAndDropVisualMode.Copy;
+            });
+            workspace.RegisterCallback<DragPerformEvent>(OnDragPerform);
         }
 
-        private void OnGenerateClicked()
+        private void RemoveAttachment()
         {
-            string prompt = _promptField.value.Trim();
-            if (string.IsNullOrEmpty(prompt))
+            _selectedReferencePath = "";
+            if (_attachmentContainer != null) _attachmentContainer.style.display = DisplayStyle.None;
+        }
+
+        private void AttachReferenceImage(string path)
+        {
+            _selectedReferencePath = path;
+            if (_attachmentContainer != null)
             {
-                ShowError("Please enter a prompt description.");
+                _attachmentContainer.style.display = DisplayStyle.Flex;
+                var texture = AssetDatabase.LoadAssetAtPath<Texture2D>(path);
+                if (texture != null && _attachmentThumbnail != null)
+                {
+                    _attachmentThumbnail.image = texture;
+                    _attachmentThumbnail.style.width = 30;
+                    _attachmentThumbnail.style.height = 30;
+                }
+                if (_attachmentLabel != null)
+                {
+                    _attachmentLabel.text = Path.GetFileName(path);
+                }
+            }
+        }
+
+        private void OnDragPerform(DragPerformEvent evt)
+        {
+            DragAndDrop.AcceptDrag();
+            foreach (var obj in DragAndDrop.objectReferences)
+            {
+                if (obj is Texture2D tex)
+                {
+                    string path = AssetDatabase.GetAssetPath(tex);
+                    if (!string.IsNullOrEmpty(path))
+                    {
+                        AttachReferenceImage(path);
+                        return;
+                    }
+                }
+            }
+
+            if (DragAndDrop.paths != null && DragAndDrop.paths.Length > 0)
+            {
+                foreach (string file in DragAndDrop.paths)
+                {
+                    string ext = Path.GetExtension(file).ToLower();
+                    if (ext == ".png" || ext == ".jpg" || ext == ".jpeg")
+                    {
+                        ProcessReferenceFile(file);
+                        break;
+                    }
+                }
+            }
+        }
+
+        private void OnAttachClicked()
+        {
+            string file = EditorUtility.OpenFilePanel("Select Reference Image", "Assets", "png,jpg,jpeg");
+            if (!string.IsNullOrEmpty(file))
+            {
+                ProcessReferenceFile(file);
+            }
+        }
+
+        private void ProcessReferenceFile(string file)
+        {
+            string projectPath = Application.dataPath;
+            string cleanFile = file.Replace("\\", "/");
+            string cleanProject = projectPath.Replace("\\", "/");
+
+            if (cleanFile.StartsWith(cleanProject))
+            {
+                string relativePath = "Assets" + cleanFile.Substring(cleanProject.Length);
+                AttachReferenceImage(relativePath);
+            }
+            else
+            {
+                try
+                {
+                    string cacheDir = Path.Combine(projectPath, "Omnisense_Cache");
+                    if (!Directory.Exists(cacheDir))
+                    {
+                        Directory.CreateDirectory(cacheDir);
+                    }
+
+                    string fileName = Path.GetFileName(cleanFile);
+                    string destFile = Path.Combine(cacheDir, fileName);
+
+                    int counter = 1;
+                    string baseName = Path.GetFileNameWithoutExtension(fileName);
+                    string ext = Path.GetExtension(fileName);
+                    while (File.Exists(destFile))
+                    {
+                        destFile = Path.Combine(cacheDir, $"{baseName}_{counter}{ext}");
+                        counter++;
+                    }
+
+                    File.Copy(cleanFile, destFile);
+                    string relativePath = "Assets/Omnisense_Cache/" + Path.GetFileName(destFile);
+
+                    AssetDatabase.ImportAsset(relativePath);
+                    AssetDatabase.Refresh();
+                    AttachReferenceImage(relativePath);
+                }
+                catch (Exception ex)
+                {
+                    ShowError($"Failed to attach external image: {ex.Message}");
+                }
+            }
+        }
+
+        private void LoadLastOrNewSession()
+        {
+            _sessions = OmnisenseModelSessionManager.GetAllSessions();
+            string lastSessionId = EditorPrefs.GetString("Omnisense_ModelChat_ActiveSessionId", "");
+
+            if (_sessions.Count > 0)
+            {
+                var match = _sessions.Find(s => s.id == lastSessionId);
+                if (match != null)
+                {
+                    _activeSession = match;
+                }
+                else
+                {
+                    _activeSession = _sessions[0];
+                }
+            }
+            else
+            {
+                _activeSession = OmnisenseModelSessionManager.CreateNewSession();
+            }
+
+            EditorPrefs.SetString("Omnisense_ModelChat_ActiveSessionId", _activeSession.id);
+            PopulateSessionsList();
+            RenderActiveSessionMessages();
+        }
+
+        private void CreateNewChat()
+        {
+            _activeSession = OmnisenseModelSessionManager.CreateNewSession();
+            EditorPrefs.SetString("Omnisense_ModelChat_ActiveSessionId", _activeSession.id);
+            PopulateSessionsList();
+            RenderActiveSessionMessages();
+        }
+
+        private void LoadSession(string id)
+        {
+            var match = OmnisenseModelSessionManager.GetSessionById(id);
+            if (match != null)
+            {
+                _activeSession = match;
+                EditorPrefs.SetString("Omnisense_ModelChat_ActiveSessionId", id);
+                PopulateSessionsList();
+                RenderActiveSessionMessages();
+            }
+        }
+
+        private void DeleteSession(string id)
+        {
+            if (EditorUtility.DisplayDialog("Delete Model Chat", "Delete this model chat history permanently?", "Delete", "Cancel"))
+            {
+                OmnisenseModelSessionManager.DeleteSession(id);
+                if (_activeSession != null && _activeSession.id == id)
+                {
+                    _activeSession = null;
+                }
+                LoadLastOrNewSession();
+            }
+        }
+
+        private void PopulateSessionsList()
+        {
+            if (_chatHistoryContainer == null) return;
+            _chatHistoryContainer.Clear();
+
+            _sessions = OmnisenseModelSessionManager.GetAllSessions();
+            foreach (var session in _sessions)
+            {
+                var item = new VisualElement();
+                item.style.flexDirection = FlexDirection.Row;
+                item.style.justifyContent = Justify.SpaceBetween;
+                item.style.alignItems = Align.Center;
+                item.style.marginBottom = 4;
+                item.style.paddingLeft = 4;
+                item.style.paddingRight = 4;
+                item.style.paddingTop = 3;
+                item.style.paddingBottom = 3;
+                item.style.borderBottomWidth = 1;
+                item.style.borderBottomColor = new StyleColor(new Color(0.2f, 0.2f, 0.2f, 0.3f));
+                item.style.borderTopLeftRadius = 4;
+                item.style.borderTopRightRadius = 4;
+                item.style.borderBottomLeftRadius = 4;
+                item.style.borderBottomRightRadius = 4;
+
+                if (_activeSession != null && _activeSession.id == session.id)
+                {
+                    item.style.backgroundColor = new StyleColor(new Color(0.22f, 0.25f, 0.28f));
+                }
+
+                var titleBtn = new Button(() => LoadSession(session.id)) { text = TruncateString(session.name, 18) };
+                titleBtn.style.flexGrow = 1;
+                titleBtn.style.backgroundColor = new StyleColor(Color.clear);
+                titleBtn.style.color = new StyleColor(Color.white);
+                titleBtn.style.unityTextAlign = TextAnchor.MiddleLeft;
+                titleBtn.style.fontSize = 11;
+                titleBtn.style.borderLeftWidth = 0;
+                titleBtn.style.borderRightWidth = 0;
+                titleBtn.style.borderTopWidth = 0;
+                titleBtn.style.borderBottomWidth = 0;
+
+                var delBtn = new Button(() => DeleteSession(session.id)) { text = "🗑" };
+                delBtn.style.width = 22;
+                delBtn.style.height = 20;
+                delBtn.style.backgroundColor = new StyleColor(Color.clear);
+                delBtn.style.color = new StyleColor(new Color(0.85f, 0.35f, 0.35f));
+                delBtn.style.borderLeftWidth = 0;
+                delBtn.style.borderRightWidth = 0;
+                delBtn.style.borderTopWidth = 0;
+                delBtn.style.borderBottomWidth = 0;
+
+                item.Add(titleBtn);
+                item.Add(delBtn);
+                _chatHistoryContainer.Add(item);
+            }
+        }
+
+        private void RenderActiveSessionMessages()
+        {
+            if (_chatViewport == null) return;
+            _chatViewport.Clear();
+
+            if (_activeSession == null) return;
+
+            foreach (var msg in _activeSession.messages)
+            {
+                _chatViewport.Add(CreateMessageBubble(msg));
+            }
+
+            EditorApplication.delayCall += () => {
+                if (_chatViewport != null)
+                {
+                    _chatViewport.scrollOffset = new Vector2(0, float.MaxValue);
+                }
+            };
+        }
+
+        private VisualElement CreateMessageBubble(ModelChatMessage msg)
+        {
+            var container = new VisualElement();
+            container.style.flexDirection = FlexDirection.Column;
+            container.style.marginBottom = 10;
+
+            var bubble = new VisualElement();
+            bubble.style.paddingLeft = 10;
+            bubble.style.paddingRight = 10;
+            bubble.style.paddingTop = 8;
+            bubble.style.paddingBottom = 8;
+            bubble.style.borderTopLeftRadius = 6;
+            bubble.style.borderTopRightRadius = 6;
+            bubble.style.borderBottomLeftRadius = 6;
+            bubble.style.borderBottomRightRadius = 6;
+            bubble.style.maxWidth = Length.Percent(80);
+
+            if (msg.sender == "user")
+            {
+                bubble.style.alignSelf = Align.FlexEnd;
+                bubble.style.backgroundColor = new StyleColor(new Color(0.20f, 0.35f, 0.50f));
+                bubble.style.marginLeft = 40;
+
+                var label = CreateSelectableLabel(msg.content, Color.white);
+                bubble.Add(label);
+
+                if (!string.IsNullOrEmpty(msg.referenceImageBase64))
+                {
+                    var texture = AssetDatabase.LoadAssetAtPath<Texture2D>(msg.referenceImageBase64);
+                    if (texture != null)
+                    {
+                        var attachmentLabel = new Label($"📎 Reference Art: {msg.referenceImageName}");
+                        attachmentLabel.style.fontSize = 9;
+                        attachmentLabel.style.unityFontStyleAndWeight = FontStyle.Italic;
+                        attachmentLabel.style.color = new StyleColor(new Color(0.85f, 0.85f, 0.85f));
+                        attachmentLabel.style.marginTop = 4;
+                        bubble.Add(attachmentLabel);
+
+                        var img = new Image { image = texture };
+                        img.style.width = 120;
+                        img.style.height = 120;
+                        img.style.marginTop = 4;
+                        bubble.Add(img);
+                    }
+                }
+            }
+            else // assistant
+            {
+                bubble.style.alignSelf = Align.FlexStart;
+                bubble.style.backgroundColor = new StyleColor(new Color(0.12f, 0.13f, 0.15f));
+                bubble.style.marginRight = 40;
+
+                var label = CreateSelectableLabel(msg.content, new Color(0.9f, 0.9f, 0.9f));
+                bubble.Add(label);
+
+                if (!string.IsNullOrEmpty(msg.generatedScriptPath) || !string.IsNullOrEmpty(msg.generatedModelPath))
+                {
+                    var detailsBox = new VisualElement();
+                    detailsBox.style.backgroundColor = new StyleColor(new Color(0.18f, 0.19f, 0.21f));
+                    detailsBox.style.paddingLeft = 6;
+                    detailsBox.style.paddingRight = 6;
+                    detailsBox.style.paddingTop = 6;
+                    detailsBox.style.paddingBottom = 6;
+                    detailsBox.style.marginTop = 6;
+                    detailsBox.style.borderTopLeftRadius = 4;
+                    detailsBox.style.borderTopRightRadius = 4;
+                    detailsBox.style.borderBottomLeftRadius = 4;
+                    detailsBox.style.borderBottomRightRadius = 4;
+
+                    if (!string.IsNullOrEmpty(msg.generatedScriptPath))
+                    {
+                        detailsBox.Add(new Label($"THREE.js Script: {Path.GetFileName(msg.generatedScriptPath)}") { style = { fontSize = 10, color = new StyleColor(new Color(0.8f, 0.8f, 0.8f)) } });
+                    }
+                    if (!string.IsNullOrEmpty(msg.generatedModelPath))
+                    {
+                        detailsBox.Add(new Label($"Model glTF: {Path.GetFileName(msg.generatedModelPath)}") { style = { fontSize = 10, color = new StyleColor(new Color(0.8f, 0.8f, 0.8f)), marginTop = 2 } });
+                    }
+                    bubble.Add(detailsBox);
+
+                    var buttonRow = new VisualElement();
+                    buttonRow.style.flexDirection = FlexDirection.Row;
+                    buttonRow.style.marginTop = 6;
+
+                    if (!string.IsNullOrEmpty(msg.generatedModelPath) && File.Exists(msg.generatedModelPath))
+                    {
+                        var instantiateBtn = new Button(() => InstantiateModelInScene(msg.generatedModelPath)) { text = "🏠 Instantiate in Scene" };
+                        instantiateBtn.style.fontSize = 10;
+                        instantiateBtn.style.backgroundColor = new StyleColor(new Color(0.15f, 0.45f, 0.25f));
+                        instantiateBtn.style.color = new StyleColor(Color.white);
+                        instantiateBtn.style.marginRight = 5;
+                        buttonRow.Add(instantiateBtn);
+
+                        var selectBtn = new Button(() => {
+                            var asset = AssetDatabase.LoadAssetAtPath<GameObject>(msg.generatedModelPath);
+                            if (asset != null)
+                            {
+                                Selection.activeObject = asset;
+                                EditorGUIUtility.PingObject(asset);
+                            }
+                        }) { text = "🔍 Select Asset" };
+                        selectBtn.style.fontSize = 10;
+                        selectBtn.style.backgroundColor = new StyleColor(new Color(0.25f, 0.27f, 0.3f));
+                        selectBtn.style.color = new StyleColor(Color.white);
+                        selectBtn.style.marginRight = 5;
+                        buttonRow.Add(selectBtn);
+                    }
+
+                    if (!string.IsNullOrEmpty(msg.generatedScriptPath) && File.Exists(msg.generatedScriptPath))
+                    {
+                        var manualConvertBtn = new Button(() => {
+                            _jsFileField.value = msg.generatedScriptPath;
+                            OnConvertClicked();
+                        }) { text = "🛠 Convert JS" };
+                        manualConvertBtn.style.fontSize = 10;
+                        manualConvertBtn.style.backgroundColor = new StyleColor(new Color(0.2f, 0.44f, 0.68f));
+                        manualConvertBtn.style.color = new StyleColor(Color.white);
+                        buttonRow.Add(manualConvertBtn);
+                    }
+
+                    bubble.Add(buttonRow);
+                }
+            }
+
+            container.Add(bubble);
+            return container;
+        }
+
+        private TextField CreateSelectableLabel(string text, Color textColor)
+        {
+            var field = new TextField { value = text, isReadOnly = true, multiline = true };
+            field.style.backgroundColor = Color.clear;
+            field.style.borderLeftWidth = 0;
+            field.style.borderRightWidth = 0;
+            field.style.borderTopWidth = 0;
+            field.style.borderBottomWidth = 0;
+            field.style.paddingLeft = 0;
+            field.style.paddingRight = 0;
+            field.style.paddingTop = 0;
+            field.style.paddingBottom = 0;
+            field.style.marginTop = 0;
+            field.style.marginBottom = 0;
+            field.style.marginLeft = 0;
+            field.style.marginRight = 0;
+            field.style.whiteSpace = WhiteSpace.Normal;
+            field.style.flexGrow = 1;
+
+            var input = field.Q("unity-text-input");
+            if (input != null)
+            {
+                input.style.backgroundColor = Color.clear;
+                input.style.borderLeftWidth = 0;
+                input.style.borderRightWidth = 0;
+                input.style.borderTopWidth = 0;
+                input.style.borderBottomWidth = 0;
+                input.style.paddingLeft = 0;
+                input.style.paddingRight = 0;
+                input.style.paddingTop = 0;
+                input.style.paddingBottom = 0;
+                input.style.color = new StyleColor(textColor);
+                input.style.whiteSpace = WhiteSpace.Normal;
+            }
+            return field;
+        }
+
+        private void InstantiateModelInScene(string assetPath)
+        {
+            var asset = AssetDatabase.LoadAssetAtPath<GameObject>(assetPath);
+            if (asset != null)
+            {
+                var go = PrefabUtility.InstantiatePrefab(asset) as GameObject;
+                if (go != null)
+                {
+                    go.name = Path.GetFileNameWithoutExtension(assetPath);
+                    Undo.RegisterCreatedObjectUndo(go, "Instantiate AI Model");
+                    Selection.activeGameObject = go;
+                    Debug.Log($"[Omnisense-3D] Instantiated model in scene: {assetPath}");
+                }
+            }
+            else
+            {
+                Debug.LogWarning($"[Omnisense-3D] Unable to load asset as GameObject: {assetPath}");
+            }
+        }
+
+        private void OnSendClicked()
+        {
+            string promptText = _promptField.value.Trim();
+            if (string.IsNullOrEmpty(promptText) && string.IsNullOrEmpty(_selectedReferencePath))
+            {
                 return;
             }
 
-            string provider = _providerField.value;
-            if (provider == "Three.js Code Generator")
+            if (_activeSession == null)
             {
-                string model = _modelSelector.value;
-                string apiKey = GetApiKey(model);
-                if (string.IsNullOrEmpty(apiKey) && model != "self-hosted")
-                {
-                    ShowError("API Key for the selected LLM model is missing. Please configure it in Settings.");
-                    return;
-                }
-
-                SetLoadingState(true);
-                ShowStatus("Generating Three.js code (this can take 30-60 seconds)...");
-
-                ILLMProvider providerImpl = LLMProviderFactory.GetProvider(model);
-                if (providerImpl == null)
-                {
-                    SetLoadingState(false);
-                    ShowError($"Unsupported LLM model: {model}");
-                    return;
-                }
-
-                var messages = new List<LLMMessage>
-                {
-                    new LLMMessage { role = "system", content = "You are a Three.js 3D model generator. Generate ONLY valid, executable Three.js JavaScript code that constructs the requested 3D model. Do not include any HTML, markdown formatting, or explain anything. Use ONLY Three.js primitives (geometries like THREE.BoxGeometry, THREE.ConeGeometry, THREE.CylinderGeometry, THREE.SphereGeometry, etc.), materials, and meshes. A pre-initialized THREE.Scene named 'scene' is already provided in the execution context. Do NOT instantiate a new scene, and do NOT write window or renderer initialization code. Add all your constructed meshes directly to the provided 'scene' object (e.g., scene.add(mesh)). Only output the code inside the js response, without markdown wrap." },
-                    new LLMMessage { role = "user", content = prompt }
-                };
-
-                int maxTokens = GetMaxTokens(model);
-                _activeRequest = providerImpl.BuildRequest(apiKey, model, messages, maxTokens);
-                _requestStartTime = EditorApplication.timeSinceStartup;
-                EditorApplication.update += CheckThreeJsRequestProgress;
-                _activeRequest.SendWebRequest();
+                _activeSession = OmnisenseModelSessionManager.CreateNewSession();
             }
-            else if (provider == "Meshy AI")
+
+            var userMsg = new ModelChatMessage {
+                sender = "user",
+                content = promptText,
+                timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
+            };
+            if (!string.IsNullOrEmpty(_selectedReferencePath))
             {
-                string apiKey = EditorPrefs.GetString("Omnisense_Meshy_Key", "");
-                if (string.IsNullOrEmpty(apiKey))
-                {
-                    ShowError("Meshy API Key is missing. Please configure it in settings.");
-                    return;
-                }
-
-                SetLoadingState(true);
-                ShowStatus("Contacting Meshy AI to queue model generation...");
-
-                string url = "https://api.meshy.ai/openapi/v2/text-to-3d";
-                string body = "{" +
-                    $"\"mode\":\"preview\"," +
-                    $"\"prompt\":\"{JsonEscape(prompt)}\"," +
-                    $"\"model_type\":\"standard\"" +
-                    "}";
-
-                var req = new UnityWebRequest(url, "POST");
-                byte[] bodyRaw = System.Text.Encoding.UTF8.GetBytes(body);
-                req.uploadHandler = new UploadHandlerRaw(bodyRaw);
-                req.downloadHandler = new DownloadHandlerBuffer();
-                req.SetRequestHeader("Content-Type", "application/json");
-                req.SetRequestHeader("Authorization", "Bearer " + apiKey);
-
-                _activeRequest = req;
-                _requestStartTime = EditorApplication.timeSinceStartup;
-                EditorApplication.update += CheckMeshyRequestProgress;
-                _activeRequest.SendWebRequest();
+                userMsg.referenceImageName = Path.GetFileName(_selectedReferencePath);
+                userMsg.referenceImageBase64 = _selectedReferencePath;
             }
-            else if (provider == "Tripo3D")
+
+            _activeSession.messages.Add(userMsg);
+
+            if (_activeSession.name.StartsWith("Model Chat ") && !string.IsNullOrEmpty(promptText))
             {
-                string apiKey = EditorPrefs.GetString("Omnisense_Tripo3D_Key", "");
-                if (string.IsNullOrEmpty(apiKey))
-                {
-                    ShowError("Tripo3D API Key is missing. Please configure it in settings.");
-                    return;
-                }
-
-                SetLoadingState(true);
-                ShowStatus("Contacting Tripo3D to queue model generation...");
-
-                string url = "https://api.tripo3d.ai/v2/openapi/task";
-                string body = "{" +
-                    $"\"type\":\"text_to_model\"," +
-                    $"\"prompt\":\"{JsonEscape(prompt)}\"" +
-                    "}";
-
-                var req = new UnityWebRequest(url, "POST");
-                byte[] bodyRaw = System.Text.Encoding.UTF8.GetBytes(body);
-                req.uploadHandler = new UploadHandlerRaw(bodyRaw);
-                req.downloadHandler = new DownloadHandlerBuffer();
-                req.SetRequestHeader("Content-Type", "application/json");
-                req.SetRequestHeader("Authorization", "Bearer " + apiKey);
-
-                _activeRequest = req;
-                _requestStartTime = EditorApplication.timeSinceStartup;
-                EditorApplication.update += CheckTripoRequestProgress;
-                _activeRequest.SendWebRequest();
+                _activeSession.name = TruncateString(promptText, 25);
             }
+
+            OmnisenseModelSessionManager.SaveSession(_activeSession);
+
+            _promptField.value = "";
+            string attachedPath = _selectedReferencePath;
+            RemoveAttachment();
+
+            PopulateSessionsList();
+            RenderActiveSessionMessages();
+
+            StartLlmOrchestrator(promptText, attachedPath);
         }
 
-        private void CheckThreeJsRequestProgress()
+        private void StartLlmOrchestrator(string userPrompt, string attachedPath)
+        {
+            string model = _modelSelector.value;
+            string apiKey = GetApiKey(model);
+            if (string.IsNullOrEmpty(apiKey) && model != "self-hosted")
+            {
+                ShowError("Orchestrator API Key is missing. Please configure it in Settings.");
+                return;
+            }
+
+            SetLoadingState(true);
+            ShowStatus("Thinking and designing 3D assets (30-45 seconds)...");
+
+            ILLMProvider providerImpl = LLMProviderFactory.GetProvider(model);
+            if (providerImpl == null)
+            {
+                SetLoadingState(false);
+                ShowError($"Unsupported LLM model: {model}");
+                return;
+            }
+
+            string providerMode = _providerField.value;
+            var messages = new List<LLMMessage>();
+            messages.Add(new LLMMessage {
+                role = "system",
+                content = "You are the Omnisense AI 3D Model Orchestrator. Your role is to help the user refine, describe, design, and compile 3D assets inside the Unity editor.\n" +
+                          $"CRITICAL: The active 3D Generation Provider is currently set to: '{providerMode}'.\n" +
+                          "You MUST generate the required 3D asset in the first go. Do not just chat, ask questions, or propose ideas. Proceed to generate immediately:\n" +
+                          "1. If the provider is 'Three.js Code Generator', you MUST write the complete, valid, executable Three.js JavaScript code that constructs the requested 3D model and populate it in 'threeJsCode'. Add all constructed meshes directly to the pre-provided 'scene' object (e.g. scene.add(mesh)). Do NOT instantiate a new scene, write window headers, or html wraps. Set 'optimizedPrompt' to \"\".\n" +
+                          "2. If the provider is 'Meshy AI' or 'Tripo3D', you MUST output a highly-detailed, optimized prompt describing the 3D asset (polycount, style, materials, colors) and populate it in 'optimizedPrompt'. Set 'threeJsCode' to \"\".\n\n" +
+                          "Format your entire response strictly as a JSON block with no other markdown wrap, matching this schema:\n" +
+                          "{\n  \"explanation\": \"your explanation here\",\n  \"threeJsCode\": \"your Three.js script here\",\n  \"optimizedPrompt\": \"your optimized 3D prompt here\"\n}"
+            });
+
+            foreach (var msg in _activeSession.messages)
+            {
+                string body = msg.content;
+                if (msg.sender == "user" && !string.IsNullOrEmpty(msg.referenceImageBase64) && File.Exists(msg.referenceImageBase64))
+                {
+                    body += $"\n{{\"screenshot_path\":\"{msg.referenceImageBase64}\"}}";
+                }
+                messages.Add(new LLMMessage {
+                    role = msg.sender,
+                    content = body
+                });
+            }
+
+            int maxTokens = GetMaxTokens(model);
+            _activeRequest = providerImpl.BuildRequest(apiKey, model, messages, maxTokens);
+            _requestStartTime = EditorApplication.timeSinceStartup;
+            EditorApplication.update += CheckLlmOrchestratorProgress;
+            _activeRequest.SendWebRequest();
+        }
+
+        private void CheckLlmOrchestratorProgress()
         {
             if (_activeRequest == null)
             {
-                EditorApplication.update -= CheckThreeJsRequestProgress;
+                EditorApplication.update -= CheckLlmOrchestratorProgress;
                 return;
             }
 
+            double elapsed = EditorApplication.timeSinceStartup - _requestStartTime;
+
             if (_activeRequest.isDone)
             {
-                EditorApplication.update -= CheckThreeJsRequestProgress;
+                EditorApplication.update -= CheckLlmOrchestratorProgress;
                 SetLoadingState(false);
 
                 if (_activeRequest.result == UnityWebRequest.Result.Success)
@@ -448,15 +926,7 @@ namespace Omnisense
                     ILLMProvider providerImpl = LLMProviderFactory.GetProvider(model);
                     string parsedContent = providerImpl.ParseResponseContent(rawResponse);
 
-                    string cleanCode = parsedContent;
-                    var match = Regex.Match(parsedContent, @"```(?:javascript|js)?\s*([\s\S]*?)\s*```", RegexOptions.IgnoreCase);
-                    if (match.Success)
-                    {
-                        cleanCode = match.Groups[1].Value;
-                    }
-                    cleanCode = cleanCode.Trim();
-
-                    SaveThreeJsFile(cleanCode);
+                    ProcessOrchestratorReply(parsedContent);
                 }
                 else
                 {
@@ -465,10 +935,98 @@ namespace Omnisense
                 _activeRequest.Dispose();
                 _activeRequest = null;
             }
+            else if (elapsed > 90)
+            {
+                EditorApplication.update -= CheckLlmOrchestratorProgress;
+                _activeRequest.Abort();
+                _activeRequest.Dispose();
+                _activeRequest = null;
+                SetLoadingState(false);
+                ShowError($"LLM Request timed out after {elapsed:F0} seconds.");
+            }
         }
 
-        private void SaveThreeJsFile(string code)
+        [Serializable]
+        private class ModelResponseDTO
         {
+            public string explanation;
+            public string threeJsCode;
+            public string optimizedPrompt;
+        }
+
+        private void ProcessOrchestratorReply(string rawResponse)
+        {
+            string explanation = "";
+            string threeJsCode = "";
+            string optimizedPrompt = "";
+
+            string cleanResponse = rawResponse.Trim();
+            var match = Regex.Match(cleanResponse, @"```(?:json)?\s*([\s\S]*?)\s*```", RegexOptions.IgnoreCase);
+            if (match.Success)
+            {
+                cleanResponse = match.Groups[1].Value.Trim();
+            }
+
+            try
+            {
+                if (cleanResponse.StartsWith("{"))
+                {
+                    var dto = JsonUtility.FromJson<ModelResponseDTO>(cleanResponse);
+                    explanation = dto.explanation;
+                    threeJsCode = dto.threeJsCode;
+                    optimizedPrompt = dto.optimizedPrompt;
+                }
+                else
+                {
+                    explanation = "Processing output...";
+                    string provider = _providerField.value;
+                    if (provider == "Three.js Code Generator") threeJsCode = cleanResponse;
+                    else optimizedPrompt = cleanResponse;
+                }
+            }
+            catch
+            {
+                explanation = "Processing output...";
+                string provider = _providerField.value;
+                if (provider == "Three.js Code Generator") threeJsCode = cleanResponse;
+                else optimizedPrompt = cleanResponse;
+            }
+
+            if (string.IsNullOrEmpty(explanation)) explanation = "Generated 3D asset successfully.";
+
+            string providerMode = _providerField.value;
+            if (providerMode == "Three.js Code Generator" && !string.IsNullOrEmpty(threeJsCode))
+            {
+                SaveThreeJsAndConvert(explanation, threeJsCode);
+            }
+            else if ((providerMode == "Meshy AI" || providerMode == "Tripo3D") && !string.IsNullOrEmpty(optimizedPrompt))
+            {
+                TriggerCloudModelGeneration(explanation, optimizedPrompt);
+            }
+            else
+            {
+                var assistantMsg = new ModelChatMessage {
+                    sender = "assistant",
+                    content = explanation,
+                    timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
+                };
+                _activeSession.messages.Add(assistantMsg);
+                OmnisenseModelSessionManager.SaveSession(_activeSession);
+                RenderActiveSessionMessages();
+            }
+        }
+
+        private void SaveThreeJsAndConvert(string explanation, string code)
+        {
+            _pendingExplanation = explanation;
+
+            var jsMatch = Regex.Match(code, @"```(?:javascript|js)?\s*([\s\S]*?)\s*```", RegexOptions.IgnoreCase);
+            if (jsMatch.Success)
+            {
+                code = jsMatch.Groups[1].Value;
+            }
+            code = code.Trim();
+
             string rawPath = _pathField.value.Trim();
             if (string.IsNullOrEmpty(rawPath)) rawPath = "Assets/";
 
@@ -520,7 +1078,6 @@ namespace Omnisense
                 AssetDatabase.Refresh();
 
                 _jsFileField.value = finalPath;
-                ShowSuccess($"Three.js code generated and saved successfully at:\n{finalPath}");
 
                 string absoluteGltfPath = Path.ChangeExtension(absoluteFilePath, ".gltf");
                 string gltfPath = Path.ChangeExtension(finalPath, ".gltf").Replace("\\", "/");
@@ -535,18 +1092,102 @@ namespace Omnisense
                     {
                         AssetDatabase.ImportAsset(gltfPath);
                         AssetDatabase.Refresh();
-                        ShowSuccess($"Three.js code generated and successfully converted to glTF at:\n{gltfPath}");
+
+                        var assistantMsg = new ModelChatMessage {
+                            sender = "assistant",
+                            content = _pendingExplanation,
+                            generatedScriptPath = finalPath,
+                            generatedModelPath = gltfPath,
+                            timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
+                        };
+                        _activeSession.messages.Add(assistantMsg);
+                        OmnisenseModelSessionManager.SaveSession(_activeSession);
+                        ShowSuccess($"Three.js model generated and converted to glTF successfully at: {gltfPath}");
+                        RenderActiveSessionMessages();
                     }
                     else
                     {
-                        ShowError($"Three.js code saved, but glTF Conversion Failed:\n{result}");
+                        AddSystemErrorMessage(_pendingExplanation, $"Three.js script saved at {finalPath}, but glTF Conversion Failed: {result}");
                     }
                 });
             }
             catch (Exception ex)
             {
-                ShowError($"Failed to save Three.js file: {ex.Message}");
+                AddSystemErrorMessage(explanation, $"Failed to write Three.js file: {ex.Message}");
             }
+        }
+
+        private void TriggerCloudModelGeneration(string explanation, string prompt)
+        {
+            _pendingExplanation = explanation;
+            string provider = _providerField.value;
+
+            if (provider == "Meshy AI")
+            {
+                string apiKey = EditorPrefs.GetString("Omnisense_Meshy_Key", "");
+                if (string.IsNullOrEmpty(apiKey))
+                {
+                    AddSystemErrorMessage(explanation, "Meshy API Key is missing. Please configure it in Settings.");
+                    return;
+                }
+
+                SetLoadingState(true);
+                ShowStatus("Contacting Meshy AI to queue model generation...");
+
+                string url = "https://api.meshy.ai/openapi/v2/text-to-3d";
+                string body = "{" +
+                    $"\"mode\":\"preview\"," +
+                    $"\"prompt\":\"{JsonEscape(prompt)}\"," +
+                    $"\"model_type\":\"standard\"" +
+                    "}";
+
+                var req = new UnityWebRequest(url, "POST");
+                byte[] bodyRaw = System.Text.Encoding.UTF8.GetBytes(body);
+                req.uploadHandler = new UploadHandlerRaw(bodyRaw);
+                req.downloadHandler = new DownloadHandlerBuffer();
+                req.SetRequestHeader("Content-Type", "application/json");
+                req.SetRequestHeader("Authorization", "Bearer " + apiKey);
+
+                _activeRequest = req;
+                _requestStartTime = EditorApplication.timeSinceStartup;
+                EditorApplication.update += CheckMeshyRequestProgress;
+                _activeRequest.SendWebRequest();
+            }
+            else if (provider == "Tripo3D")
+            {
+                string apiKey = EditorPrefs.GetString("Omnisense_Tripo3D_Key", "");
+                if (string.IsNullOrEmpty(apiKey))
+                {
+                    AddSystemErrorMessage(explanation, "Tripo3D API Key is missing. Please configure it in Settings.");
+                    return;
+                }
+
+                SetLoadingState(true);
+                ShowStatus("Contacting Tripo3D to queue model generation...");
+
+                string url = "https://api.tripo3d.ai/v2/openapi/task";
+                string body = "{" +
+                    $"\"type\":\"text_to_model\"," +
+                    $"\"prompt\":\"{JsonEscape(prompt)}\"" +
+                    "}";
+
+                var req = new UnityWebRequest(url, "POST");
+                byte[] bodyRaw = System.Text.Encoding.UTF8.GetBytes(body);
+                req.uploadHandler = new UploadHandlerRaw(bodyRaw);
+                req.downloadHandler = new DownloadHandlerBuffer();
+                req.SetRequestHeader("Content-Type", "application/json");
+                req.SetRequestHeader("Authorization", "Bearer " + apiKey);
+
+                _activeRequest = req;
+                _requestStartTime = EditorApplication.timeSinceStartup;
+                EditorApplication.update += CheckTripoRequestProgress;
+                _activeRequest.SendWebRequest();
+            }
+        }
+
+        private void CheckThreeJsRequestProgress()
+        {
+            // Obsolete in chat mode, but preserved as fallback signature
         }
 
         private void CheckMeshyRequestProgress()
@@ -572,14 +1213,14 @@ namespace Omnisense
                     else
                     {
                         SetLoadingState(false);
-                        ShowError($"Failed to parse task ID from Meshy response:\n{json}");
+                        AddSystemErrorMessage(_pendingExplanation, $"Failed to parse task ID from Meshy response:\n{json}");
                     }
                 }
                 else
                 {
                     string err = _activeRequest.downloadHandler?.text ?? _activeRequest.error;
                     SetLoadingState(false);
-                    ShowError($"Meshy Task creation failed: {err}");
+                    AddSystemErrorMessage(_pendingExplanation, $"Meshy Task creation failed: {err}");
                 }
                 _activeRequest.Dispose();
                 _activeRequest = null;
@@ -609,14 +1250,14 @@ namespace Omnisense
                     else
                     {
                         SetLoadingState(false);
-                        ShowError($"Failed to parse task ID from Tripo3D response:\n{json}");
+                        AddSystemErrorMessage(_pendingExplanation, $"Failed to parse task ID from Tripo3D response:\n{json}");
                     }
                 }
                 else
                 {
                     string err = _activeRequest.downloadHandler?.text ?? _activeRequest.error;
                     SetLoadingState(false);
-                    ShowError($"Tripo3D Task creation failed: {err}");
+                    AddSystemErrorMessage(_pendingExplanation, $"Tripo3D Task creation failed: {err}");
                 }
                 _activeRequest.Dispose();
                 _activeRequest = null;
@@ -630,7 +1271,7 @@ namespace Omnisense
             _lastPollTime = EditorApplication.timeSinceStartup;
             _pollAttempts = 0;
             SetLoadingState(true);
-            ShowStatus("Task created. Generating 3D model (this can take 1-3 minutes)...");
+            ShowStatus("Task queued. Generating model (1-3 minutes)...");
             EditorApplication.update += PollTaskStatus;
         }
 
@@ -641,11 +1282,11 @@ namespace Omnisense
             _lastPollTime = time;
 
             _pollAttempts++;
-            if (_pollAttempts > 60) // 3 minutes timeout
+            if (_pollAttempts > 60)
             {
                 EditorApplication.update -= PollTaskStatus;
                 SetLoadingState(false);
-                ShowError("Generation timed out during API execution.");
+                AddSystemErrorMessage(_pendingExplanation, "Task timed out during remote generation.");
                 return;
             }
 
@@ -685,7 +1326,7 @@ namespace Omnisense
                     {
                         string status = statusMatch.Groups[1].Value;
                         string progress = progressMatch.Success ? progressMatch.Groups[1].Value : "0";
-                        ShowStatus($"Generating 3D model: {progress}% ({status})... (Attempt {_pollAttempts})");
+                        ShowStatus($"Generating: {progress}% ({status})... (Attempt {_pollAttempts})");
 
                         if (status == "SUCCEEDED")
                         {
@@ -699,14 +1340,14 @@ namespace Omnisense
                             else
                             {
                                 SetLoadingState(false);
-                                ShowError("Failed to find GLB file URL in completed task response.");
+                                AddSystemErrorMessage(_pendingExplanation, "Failed to find GLB file URL in completed task response.");
                             }
                         }
                         else if (status == "FAILED")
                         {
                             EditorApplication.update -= PollTaskStatus;
                             SetLoadingState(false);
-                            ShowError("Generation failed on Meshy AI server.");
+                            AddSystemErrorMessage(_pendingExplanation, "Generation failed on Meshy AI server.");
                         }
                     }
                 }
@@ -716,7 +1357,7 @@ namespace Omnisense
                     if (statusMatch.Success)
                     {
                         string status = statusMatch.Groups[1].Value;
-                        ShowStatus($"Generating 3D model: {status}... (Attempt {_pollAttempts})");
+                        ShowStatus($"Generating: {status}... (Attempt {_pollAttempts})");
 
                         if (status == "success")
                         {
@@ -730,14 +1371,14 @@ namespace Omnisense
                             else
                             {
                                 SetLoadingState(false);
-                                ShowError("Failed to find GLB file URL in completed task response.");
+                                AddSystemErrorMessage(_pendingExplanation, "Failed to find GLB file URL in completed task response.");
                             }
                         }
                         else if (status == "failed")
                         {
                             EditorApplication.update -= PollTaskStatus;
                             SetLoadingState(false);
-                            ShowError("Generation failed on Tripo3D server.");
+                            AddSystemErrorMessage(_pendingExplanation, "Generation failed on Tripo3D server.");
                         }
                     }
                 }
@@ -746,7 +1387,7 @@ namespace Omnisense
 
         private void DownloadModelBytes(string url, string format)
         {
-            ShowStatus("Downloading 3D model file...");
+            ShowStatus("Downloading model file...");
             var req = UnityWebRequest.Get(url);
             var op = req.SendWebRequest();
             op.completed += (o) =>
@@ -759,7 +1400,7 @@ namespace Omnisense
                 }
                 else
                 {
-                    ShowError($"Failed to download model: {req.error}");
+                    AddSystemErrorMessage(_pendingExplanation, $"Failed to download model: {req.error}");
                 }
                 req.Dispose();
             };
@@ -817,12 +1458,35 @@ namespace Omnisense
                 AssetDatabase.ImportAsset(finalPath);
                 AssetDatabase.Refresh();
 
+                var assistantMsg = new ModelChatMessage {
+                    sender = "assistant",
+                    content = _pendingExplanation,
+                    generatedModelPath = finalPath,
+                    timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
+                };
+                _activeSession.messages.Add(assistantMsg);
+                OmnisenseModelSessionManager.SaveSession(_activeSession);
+
                 ShowSuccess($"3D model saved and imported successfully at:\n{finalPath}");
+                RenderActiveSessionMessages();
             }
             catch (Exception ex)
             {
-                ShowError($"Failed to save model file: {ex.Message}");
+                AddSystemErrorMessage(_pendingExplanation, $"Failed to save model file: {ex.Message}");
             }
+        }
+
+        private void AddSystemErrorMessage(string explanation, string error)
+        {
+            var assistantMsg = new ModelChatMessage {
+                sender = "assistant",
+                content = $"{explanation}\n\n[System Notice: {error}]",
+                timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
+            };
+            _activeSession.messages.Add(assistantMsg);
+            OmnisenseModelSessionManager.SaveSession(_activeSession);
+            RenderActiveSessionMessages();
+            ShowError(error);
         }
 
         private void OnConvertClicked()
@@ -876,7 +1540,6 @@ namespace Omnisense
             _convertBtn.SetEnabled(false);
             ShowStatus("Converting Three.js model to glTF...");
 
-            // Ensure dependencies are installed
             EnsureNodeDependencies();
 
             string absoluteJsPath = jsPath.StartsWith("Assets") ? Path.Combine(Application.dataPath, "..", jsPath) : jsPath;
@@ -1186,12 +1849,117 @@ try {
             _modelSelector.SetEnabled(!loading);
             _pathField.SetEnabled(!loading);
             if (_convertBtn != null) _convertBtn.SetEnabled(!loading);
+            if (_attachBtn != null) _attachBtn.SetEnabled(!loading);
         }
 
         private string JsonEscape(string text)
         {
             if (string.IsNullOrEmpty(text)) return "";
             return text.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\n", "\\n").Replace("\r", "\\r");
+        }
+
+        private string TruncateString(string str, int maxLen)
+        {
+            if (string.IsNullOrEmpty(str)) return "";
+            if (str.Length <= maxLen) return str;
+            return str.Substring(0, maxLen - 3) + "...";
+        }
+    }
+
+    [Serializable]
+    public class ModelChatMessage
+    {
+        public string sender; // "user" or "assistant"
+        public string content; // text explanation/prompts
+        public string timestamp;
+        public string referenceImageName;
+        public string referenceImageBase64;
+        public string generatedScriptPath; // path to the generated Three.js code (.js)
+        public string generatedModelPath; // path to the generated glTF model (.gltf / .glb)
+    }
+
+    [Serializable]
+    public class ModelChatSession
+    {
+        public string id;
+        public string name;
+        public List<ModelChatMessage> messages = new List<ModelChatMessage>();
+        public string lastUpdated;
+    }
+
+    public static class OmnisenseModelSessionManager
+    {
+        private static readonly string HistoryPath;
+
+        static OmnisenseModelSessionManager()
+        {
+            try
+            {
+                HistoryPath = Path.Combine(Application.dataPath, "..", "UserSettings", "OmnisenseModelHistory");
+            }
+            catch (Exception)
+            {
+                HistoryPath = Path.Combine(Directory.GetCurrentDirectory(), "UserSettings", "OmnisenseModelHistory");
+            }
+        }
+
+        public static void SaveSession(ModelChatSession session)
+        {
+            if (!Directory.Exists(HistoryPath)) Directory.CreateDirectory(HistoryPath);
+
+            session.lastUpdated = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+            string json = JsonUtility.ToJson(session, true);
+            File.WriteAllText(Path.Combine(HistoryPath, $"{session.id}.json"), json);
+        }
+
+        public static List<ModelChatSession> GetAllSessions()
+        {
+            var sessions = new List<ModelChatSession>();
+            if (!Directory.Exists(HistoryPath)) return sessions;
+
+            foreach (var file in Directory.GetFiles(HistoryPath, "*.json"))
+            {
+                try {
+                    string json = File.ReadAllText(file);
+                    sessions.Add(JsonUtility.FromJson<ModelChatSession>(json));
+                } catch { /* Corrupt file */ }
+            }
+
+            sessions.Sort((a, b) => string.Compare(b.lastUpdated, a.lastUpdated)); // Newest first
+            return sessions;
+        }
+
+        public static ModelChatSession GetSessionById(string id)
+        {
+            if (string.IsNullOrEmpty(id)) return null;
+            string path = Path.Combine(HistoryPath, $"{id}.json");
+            if (!File.Exists(path)) return null;
+
+            try {
+                string json = File.ReadAllText(path);
+                return JsonUtility.FromJson<ModelChatSession>(json);
+            } catch { return null; }
+        }
+
+        public static ModelChatSession CreateNewSession()
+        {
+            var session = new ModelChatSession {
+                id = Guid.NewGuid().ToString(),
+                name = $"Model Chat {DateTime.Now:MMM dd, HH:mm}",
+                lastUpdated = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
+            };
+            SaveSession(session);
+            return session;
+        }
+
+        public static void DeleteSession(string id)
+        {
+            if (string.IsNullOrEmpty(id)) return;
+            string path = Path.Combine(HistoryPath, $"{id}.json");
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
         }
     }
 }
