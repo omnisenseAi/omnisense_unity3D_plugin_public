@@ -141,7 +141,7 @@ namespace Omnisense
             string body = BuildBody(model, messages, maxTokens);
 
             var req = new UnityWebRequest("https://api.openai.com/v1/chat/completions", "POST");
-            req.timeout = 60;
+            req.timeout = 180;
             byte[] bodyRaw = Encoding.UTF8.GetBytes(body);
             req.uploadHandler = new UploadHandlerRaw(bodyRaw);
             req.downloadHandler = new DownloadHandlerBuffer();
@@ -226,7 +226,7 @@ namespace Omnisense
             string body = BuildBody(model, messages, maxTokens);
 
             var req = new UnityWebRequest("https://api.anthropic.com/v1/messages", "POST");
-            req.timeout = 60;
+            req.timeout = 180;
             byte[] bodyRaw = Encoding.UTF8.GetBytes(body);
             req.uploadHandler = new UploadHandlerRaw(bodyRaw);
             req.downloadHandler = new DownloadHandlerBuffer();
@@ -313,7 +313,7 @@ namespace Omnisense
             string url = $"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={apiKey}";
 
             var req = new UnityWebRequest(url, "POST");
-            req.timeout = 60;
+            req.timeout = 180;
             byte[] bodyRaw = Encoding.UTF8.GetBytes(body);
             req.uploadHandler = new UploadHandlerRaw(bodyRaw);
             req.downloadHandler = new DownloadHandlerBuffer();
@@ -403,7 +403,7 @@ namespace Omnisense
             sb.Append(",\"max_completion_tokens\":").Append(maxTokens).Append('}');
 
             var req = new UnityWebRequest("https://api.x.ai/v1/chat/completions", "POST");
-            req.timeout = 60;
+            req.timeout = 180;
             byte[] bodyRaw = Encoding.UTF8.GetBytes(sb.ToString());
             req.uploadHandler = new UploadHandlerRaw(bodyRaw);
             req.downloadHandler = new DownloadHandlerBuffer();

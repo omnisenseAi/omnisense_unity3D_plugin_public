@@ -935,7 +935,7 @@ namespace Omnisense
                 _activeRequest.Dispose();
                 _activeRequest = null;
             }
-            else if (elapsed > 90)
+            else if (elapsed > 180)
             {
                 EditorApplication.update -= CheckLlmOrchestratorProgress;
                 _activeRequest.Abort();

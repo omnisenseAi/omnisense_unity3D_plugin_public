@@ -91,3 +91,10 @@ When a file is browsed (via button click) or dropped onto the workspace, the sys
 To address the usability constraint where developers could not highlight or copy explanation/prompt text from the chat bubbles:
 - **Refactoring Labels to TextFields**: Replaced standard non-selectable `Label` elements inside message bubbles with read-only, multiline `TextField` controls in both [ImageGenerationPopup.cs](file:///e:/OmniSense_Unity3D_Plugin/OmniSense_Unity3D_Plugin/Assets/Editor/Omnisense/ImageGenerationPopup.cs) and [ModelGenerationPopup.cs](file:///e:/OmniSense_Unity3D_Plugin/OmniSense_Unity3D_Plugin/Assets/Editor/Omnisense/ModelGenerationPopup.cs).
 - **Seamless Styling (Transparent Overlay)**: Introduced `CreateSelectableLabel(text, color)` which resets all margins, paddings, backgrounds, borders, and input fields of the `TextField` to fully transparent/empty. This keeps the message bubbles looking identical to labels while natively exposing standard click-and-drag text selection and copy commands (`Ctrl+C`).
+
+---
+
+## 6. Connection Timeout Improvements for Heavy Reasoning Models
+To resolve network connection timeouts (particularly when utilizing heavy reasoning models such as `gpt-5.5` or complex multi-turn prompts):
+- **UnityWebRequest Timeout Extension**: Adjusted the `UnityWebRequest.timeout` setting in [LLMProviders.cs](file:///e:/OmniSense_Unity3D_Plugin/OmniSense_Unity3D_Plugin/Assets/Editor/Omnisense/LLMProviders.cs) from 60 seconds to 180 seconds across the OpenAI, Anthropic, Gemini, and Grok API gateways.
+- **Popup UI safety checks**: Synchronized the progress checking loops in [ModelGenerationPopup.cs](file:///e:/OmniSense_Unity3D_Plugin/OmniSense_Unity3D_Plugin/Assets/Editor/Omnisense/ModelGenerationPopup.cs) and [ImageGenerationPopup.cs](file:///e:/OmniSense_Unity3D_Plugin/OmniSense_Unity3D_Plugin/Assets/Editor/Omnisense/ImageGenerationPopup.cs) from `90` seconds to `180` seconds to match the connection request settings, preventing premature client-side aborts.
