@@ -1022,6 +1022,10 @@ namespace Omnisense
             if (model.Contains("claude")) return EditorPrefs.GetString("Omnisense_Anthropic_Key", "");
             if (model.Contains("gemini")) return EditorPrefs.GetString("Omnisense_Gemini_Key", "");
             if (model.Contains("grok")) return EditorPrefs.GetString("Omnisense_Grok_Key", "");
+            if (model.Contains("deepseek")) return EditorPrefs.GetString("Omnisense_DeepSeek_Key", "");
+            if (model.Contains("qwen")) return EditorPrefs.GetString("Omnisense_Qwen_Key", "");
+            if (model.Contains("glm")) return EditorPrefs.GetString("Omnisense_GLM_Key", "");
+            if (model.Contains("kimi")) return EditorPrefs.GetString("Omnisense_Kimi_Key", "");
             if (model == "self-hosted") return EditorPrefs.GetString("Omnisense_SelfHosted_Key", "");
             return "";
         }
@@ -1032,6 +1036,10 @@ namespace Omnisense
             if (model.Contains("claude")) return EditorPrefs.GetInt("Omnisense_Anthropic_MaxTokens", 4096);
             if (model.Contains("gemini")) return EditorPrefs.GetInt("Omnisense_Gemini_MaxTokens", 4096);
             if (model.Contains("grok")) return EditorPrefs.GetInt("Omnisense_Grok_MaxTokens", 4096);
+            if (model.Contains("deepseek")) return EditorPrefs.GetInt("Omnisense_DeepSeek_MaxTokens", 4096);
+            if (model.Contains("qwen")) return EditorPrefs.GetInt("Omnisense_Qwen_MaxTokens", 4096);
+            if (model.Contains("glm")) return EditorPrefs.GetInt("Omnisense_GLM_MaxTokens", 4096);
+            if (model.Contains("kimi")) return EditorPrefs.GetInt("Omnisense_Kimi_MaxTokens", 4096);
             if (model == "self-hosted") return EditorPrefs.GetInt("Omnisense_SelfHosted_MaxTokens", 4096);
             return 4096;
         }

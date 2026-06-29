@@ -76,8 +76,12 @@ namespace Omnisense
             if (model.StartsWith("claude")) return new AnthropicProvider();
             if (model.StartsWith("gemini")) return new GeminiProvider();
             if (model.StartsWith("grok")) return new GrokProvider();
-            if (model == "self-hosted") return new SelfHostedProvider();
-            return null;
+            if (model.StartsWith("deepseek")) return new DeepSeekProvider();
+            if (model.StartsWith("qwen")) return new QwenProvider();
+            if (model.StartsWith("glm")) return new GLMProvider();
+            if (model.StartsWith("kimi")) return new KimiProvider();
+            // All other models route to SelfHostedProvider (OpenAI-compatible client)
+            return new SelfHostedProvider();
         }
     }
 
@@ -435,7 +439,11 @@ namespace Omnisense
                 endpoint += endpoint.EndsWith("/") ? "chat/completions" : "/chat/completions";
             }
 
-            string targetModel = EditorPrefs.GetString("Omnisense_SelfHosted_Model", "llama3:8b");
+            string targetModel = model;
+            if (targetModel == "self-hosted")
+            {
+                targetModel = EditorPrefs.GetString("Omnisense_SelfHosted_Model", "llama3:8b");
+            }
 
             var sb = new StringBuilder(8192);
             sb.Append("{\"model\":\"").Append(targetModel).Append("\",\"messages\":");
@@ -452,6 +460,118 @@ namespace Omnisense
             {
                 req.SetRequestHeader("Authorization", "Bearer " + apiKey);
             }
+            return req;
+        }
+
+        public string ParseResponseContent(string rawJson)
+        {
+            return OpenAIProvider.ParseOpenAICompatible(rawJson);
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    //  DeepSeek Provider
+    // ─────────────────────────────────────────────────────────────
+    public class DeepSeekProvider : ILLMProvider
+    {
+        public UnityWebRequest BuildRequest(string apiKey, string model, List<LLMMessage> messages, int maxTokens)
+        {
+            var sb = new StringBuilder(8192);
+            sb.Append("{\"model\":\"").Append(model).Append("\",\"messages\":");
+            OpenAIProvider.BuildOpenAIMessages(sb, messages);
+            sb.Append(",\"max_tokens\":").Append(maxTokens).Append('}');
+
+            var req = new UnityWebRequest("https://api.deepseek.com/chat/completions", "POST");
+            req.timeout = 180;
+            byte[] bodyRaw = Encoding.UTF8.GetBytes(sb.ToString());
+            req.uploadHandler = new UploadHandlerRaw(bodyRaw);
+            req.downloadHandler = new DownloadHandlerBuffer();
+            req.SetRequestHeader("Content-Type", "application/json");
+            req.SetRequestHeader("Authorization", "Bearer " + apiKey);
+            return req;
+        }
+
+        public string ParseResponseContent(string rawJson)
+        {
+            return OpenAIProvider.ParseOpenAICompatible(rawJson);
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    //  Qwen Provider (DashScope)
+    // ─────────────────────────────────────────────────────────────
+    public class QwenProvider : ILLMProvider
+    {
+        public UnityWebRequest BuildRequest(string apiKey, string model, List<LLMMessage> messages, int maxTokens)
+        {
+            var sb = new StringBuilder(8192);
+            sb.Append("{\"model\":\"").Append(model).Append("\",\"messages\":");
+            OpenAIProvider.BuildOpenAIMessages(sb, messages);
+            sb.Append(",\"max_tokens\":").Append(maxTokens).Append('}');
+
+            var req = new UnityWebRequest("https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions", "POST");
+            req.timeout = 180;
+            byte[] bodyRaw = Encoding.UTF8.GetBytes(sb.ToString());
+            req.uploadHandler = new UploadHandlerRaw(bodyRaw);
+            req.downloadHandler = new DownloadHandlerBuffer();
+            req.SetRequestHeader("Content-Type", "application/json");
+            req.SetRequestHeader("Authorization", "Bearer " + apiKey);
+            return req;
+        }
+
+        public string ParseResponseContent(string rawJson)
+        {
+            return OpenAIProvider.ParseOpenAICompatible(rawJson);
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    //  GLM Provider (Zhipu AI)
+    // ─────────────────────────────────────────────────────────────
+    public class GLMProvider : ILLMProvider
+    {
+        public UnityWebRequest BuildRequest(string apiKey, string model, List<LLMMessage> messages, int maxTokens)
+        {
+            var sb = new StringBuilder(8192);
+            sb.Append("{\"model\":\"").Append(model).Append("\",\"messages\":");
+            OpenAIProvider.BuildOpenAIMessages(sb, messages);
+            sb.Append(",\"max_tokens\":").Append(maxTokens).Append('}');
+
+            var req = new UnityWebRequest("https://open.bigmodel.cn/api/paas/v4/chat/completions", "POST");
+            req.timeout = 180;
+            byte[] bodyRaw = Encoding.UTF8.GetBytes(sb.ToString());
+            req.uploadHandler = new UploadHandlerRaw(bodyRaw);
+            req.downloadHandler = new DownloadHandlerBuffer();
+            req.SetRequestHeader("Content-Type", "application/json");
+            req.SetRequestHeader("Authorization", "Bearer " + apiKey);
+            return req;
+        }
+
+        public string ParseResponseContent(string rawJson)
+        {
+            return OpenAIProvider.ParseOpenAICompatible(rawJson);
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    //  Kimi Provider (Moonshot AI)
+    // ─────────────────────────────────────────────────────────────
+    public class KimiProvider : ILLMProvider
+    {
+        public UnityWebRequest BuildRequest(string apiKey, string model, List<LLMMessage> messages, int maxTokens)
+        {
+            var sb = new StringBuilder(8192);
+            sb.Append("{\"model\":\"").Append(model).Append("\",\"messages\":");
+            OpenAIProvider.BuildOpenAIMessages(sb, messages);
+            sb.Append(",\"max_tokens\":").Append(maxTokens).Append('}');
+
+            var req = new UnityWebRequest("https://api.moonshot.cn/v1/chat/completions", "POST");
+            req.timeout = 180;
+            byte[] bodyRaw = Encoding.UTF8.GetBytes(sb.ToString());
+            req.uploadHandler = new UploadHandlerRaw(bodyRaw);
+            req.downloadHandler = new DownloadHandlerBuffer();
+            req.SetRequestHeader("Content-Type", "application/json");
+            req.SetRequestHeader("Authorization", "Bearer " + apiKey);
             return req;
         }
 

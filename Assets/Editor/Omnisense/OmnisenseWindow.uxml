@@ -105,6 +105,38 @@
 
                         <ui:Label text="Luma AI API Key:" class="field-label" />
                         <ui:TextField name="luma-key" password="true" class="field-input" />
+
+                        <ui:Label text="DeepSeek API Key:" class="field-label" />
+                        <ui:TextField name="deepseek-key" password="true" class="field-input" />
+                        <ui:Label text="DeepSeek Max Output Tokens (1 - 8192):" class="field-label" />
+                        <ui:VisualElement class="slider-row">
+                            <ui:SliderInt name="deepseek-max-tokens-slider" low-value="1" high-value="8192" class="token-slider" />
+                            <ui:IntegerField name="deepseek-max-tokens-field" class="token-field" />
+                        </ui:VisualElement>
+
+                        <ui:Label text="Qwen (DashScope) API Key:" class="field-label" />
+                        <ui:TextField name="qwen-key" password="true" class="field-input" />
+                        <ui:Label text="Qwen Max Output Tokens (1 - 8192):" class="field-label" />
+                        <ui:VisualElement class="slider-row">
+                            <ui:SliderInt name="qwen-max-tokens-slider" low-value="1" high-value="8192" class="token-slider" />
+                            <ui:IntegerField name="qwen-max-tokens-field" class="token-field" />
+                        </ui:VisualElement>
+
+                        <ui:Label text="GLM (Zhipu AI) API Key:" class="field-label" />
+                        <ui:TextField name="glm-key" password="true" class="field-input" />
+                        <ui:Label text="GLM Max Output Tokens (1 - 8192):" class="field-label" />
+                        <ui:VisualElement class="slider-row">
+                            <ui:SliderInt name="glm-max-tokens-slider" low-value="1" high-value="8192" class="token-slider" />
+                            <ui:IntegerField name="glm-max-tokens-field" class="token-field" />
+                        </ui:VisualElement>
+
+                        <ui:Label text="Kimi (Moonshot AI) API Key:" class="field-label" />
+                        <ui:TextField name="kimi-key" password="true" class="field-input" />
+                        <ui:Label text="Kimi Max Output Tokens (1 - 8192):" class="field-label" />
+                        <ui:VisualElement class="slider-row">
+                            <ui:SliderInt name="kimi-max-tokens-slider" low-value="1" high-value="8192" class="token-slider" />
+                            <ui:IntegerField name="kimi-max-tokens-field" class="token-field" />
+                        </ui:VisualElement>
                     </ui:VisualElement>
 
                     <ui:VisualElement name="selfhosted-settings" class="settings-group hidden">

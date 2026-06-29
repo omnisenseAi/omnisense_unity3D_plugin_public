@@ -98,3 +98,23 @@ To address the usability constraint where developers could not highlight or copy
 To resolve network connection timeouts (particularly when utilizing heavy reasoning models such as `gpt-5.5` or complex multi-turn prompts):
 - **UnityWebRequest Timeout Extension**: Adjusted the `UnityWebRequest.timeout` setting in [LLMProviders.cs](file:///e:/OmniSense_Unity3D_Plugin/OmniSense_Unity3D_Plugin/Assets/Editor/Omnisense/LLMProviders.cs) from 60 seconds to 180 seconds across the OpenAI, Anthropic, Gemini, and Grok API gateways.
 - **Popup UI safety checks**: Synchronized the progress checking loops in [ModelGenerationPopup.cs](file:///e:/OmniSense_Unity3D_Plugin/OmniSense_Unity3D_Plugin/Assets/Editor/Omnisense/ModelGenerationPopup.cs) and [ImageGenerationPopup.cs](file:///e:/OmniSense_Unity3D_Plugin/OmniSense_Unity3D_Plugin/Assets/Editor/Omnisense/ImageGenerationPopup.cs) from `90` seconds to `180` seconds to match the connection request settings, preventing premature client-side aborts.
+
+---
+
+## 7. Model Coverage & Clustered Dropdown Menus
+To support the latest frontier models across Grok, Gemini, ChatGPT/OpenAI, and Claude in the 3D model generator, the image generator, and the main workspace:
+- **Expanded Model Catalog**: Integrated the new flagship models:
+  - **OpenAI**: `gpt-5.5-thinking`, `gpt-5.5-pro`, `gpt-5.5`, `gpt-5.5-instant`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.4-nano`, `o3-mini`
+  - **Claude**: `claude-fable-5`, `claude-mythos-5`, `claude-opus-4.8`, `claude-sonnet-4.6`, `claude-haiku-4.5`, `claude-4.7-opus`, `claude-4.6-sonnet`, `claude-4.5-haiku`
+  - **Gemini**: `gemini-3.1-pro`, `gemini-3.5-flash`, `gemini-3-flash`, `gemini-3.1-flash`, `gemini-3.1-flash-lite`, `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.5-flash-lite`
+  - **Grok**: `grok-4.3`, `grok-build-0.1`, `grok-latest`, `grok-4.3-beta`, `grok-4.20-beta-2`, `grok-4.20-fast`
+- **Dynamic Provider Routing**: Leveraged the prefix-matching logic inside [LLMProviders.cs](file:///e:/OmniSense_Unity3D_Plugin/OmniSense_Unity3D_Plugin/Assets/Editor/Omnisense/LLMProviders.cs) so that all models containing keyword substrings (`gpt`, `claude`, `gemini`, `grok`, `deepseek`, `qwen`, `glm`, `kimi`) dynamically route and retrieve the correct credentials and properties seamlessly.
+- **Dedicated Commercial API Connectors**: Added dedicated provider classes in [LLMProviders.cs](file:///e:/OmniSense_Unity3D_Plugin/OmniSense_Unity3D_Plugin/Assets/Editor/Omnisense/LLMProviders.cs) for DeepSeek, Qwen (DashScope), GLM (Zhipu AI), and Kimi (Moonshot AI), routing request packages directly to their respective official API endpoints using the commercial keys configured in the settings.
+- **API Key & Token UI Controls**: Added text fields and slider controls to [OmnisenseWindow.uxml](file:///e:/OmniSense_Unity3D_Plugin/OmniSense_Unity3D_Plugin/Assets/Editor/Omnisense/OmnisenseWindow.uxml) and implemented persistence bindings in [OmnisenseWindow.cs](file:///e:/OmniSense_Unity3D_Plugin/OmniSense_Unity3D_Plugin/Assets/Editor/Omnisense/OmnisenseWindow.cs) to save and load preferences (`Omnisense_DeepSeek_Key`, `Omnisense_Qwen_Key`, `Omnisense_GLM_Key`, `Omnisense_Kimi_Key` and their respective output token boundaries).
+- **Clustered Hierarchical Menus**: Instead of displaying all models as a single long flat dropdown list, we intercepted standard interaction events (`PointerDownEvent`, `MouseDownEvent`) on the model selection fields in [OmnisenseWindow.cs](file:///e:/OmniSense_Unity3D_Plugin/OmniSense_Unity3D_Plugin/Assets/Editor/Omnisense/OmnisenseWindow.cs), [ModelGenerationPopup.cs](file:///e:/OmniSense_Unity3D_Plugin/OmniSense_Unity3D_Plugin/Assets/Editor/Omnisense/ModelGenerationPopup.cs), and [ImageGenerationPopup.cs](file:///e:/OmniSense_Unity3D_Plugin/OmniSense_Unity3D_Plugin/Assets/Editor/Omnisense/ImageGenerationPopup.cs). The clicks are redirected to open an editor-native `GenericMenu` structured into six clean sub-categories:
+  * `open ai`
+  * `claude`
+  * `gemini`
+  * `grok`
+  * `self hosted` (displays the currently configured self-hosted model, alongside popular local presets like `llama3:8b`, `mistral:7b`, `phi3`, etc. Switching models updates settings preferences automatically)
+  * `other` (contains the dedicated commercial models such as `deepseek-chat`, `deepseek-reasoner`, `qwen-2.5-coder`, `qwen-2.5-instruct`, `glm-4`, `kimi-k2`, and the standard generic `self-hosted` option, each routing through its own commercial connector)

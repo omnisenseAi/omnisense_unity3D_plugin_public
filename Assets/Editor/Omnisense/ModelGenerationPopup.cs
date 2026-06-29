@@ -200,10 +200,15 @@ namespace Omnisense
             var modelLabel = new Label("LLM Model:") { style = { unityFontStyleAndWeight = FontStyle.Bold, color = new StyleColor(new Color(0.8f, 0.8f, 0.8f)), fontSize = 10 } };
             _modelSelector = new DropdownField {
                 choices = new List<string> {
-                    "gpt-5.5", "gpt-5.4-mini", "o3-mini",
+                    "gpt-5.5-thinking", "gpt-5.5-pro", "gpt-5.5", "gpt-5.5-instant",
+                    "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano", "o3-mini",
+                    "claude-fable-5", "claude-mythos-5", "claude-opus-4.8", "claude-sonnet-4.6", "claude-haiku-4.5",
                     "claude-4.7-opus", "claude-4.6-sonnet", "claude-4.5-haiku",
-                    "gemini-3.1-pro", "gemini-3.1-flash", "gemini-3.1-flash-lite",
+                    "gemini-3.1-pro", "gemini-3.5-flash", "gemini-3-flash", "gemini-3.1-flash", "gemini-3.1-flash-lite",
+                    "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite",
+                    "grok-4.3", "grok-build-0.1", "grok-latest",
                     "grok-4.3-beta", "grok-4.20-beta-2", "grok-4.20-fast",
+                    "deepseek-chat", "deepseek-reasoner", "qwen-2.5-coder", "qwen-2.5-instruct", "glm-4", "kimi-k2",
                     "self-hosted"
                 }
             };
@@ -213,6 +218,16 @@ namespace Omnisense
             _modelSelector.RegisterValueChangedCallback(evt => {
                 EditorPrefs.SetString("Omnisense_SelectedModel", evt.newValue);
             });
+
+            _modelSelector.RegisterCallback<PointerDownEvent>(evt => {
+                evt.StopPropagation();
+                ShowModelMenu();
+            }, TrickleDown.TrickleDown);
+
+            _modelSelector.RegisterCallback<MouseDownEvent>(evt => {
+                evt.StopPropagation();
+                ShowModelMenu();
+            }, TrickleDown.TrickleDown);
             modelContainer.Add(modelLabel);
             modelContainer.Add(_modelSelector);
             dropdownsRow.Add(modelContainer);
@@ -1807,6 +1822,10 @@ try {
             if (model.Contains("claude")) return EditorPrefs.GetString("Omnisense_Anthropic_Key", "");
             if (model.Contains("gemini")) return EditorPrefs.GetString("Omnisense_Gemini_Key", "");
             if (model.Contains("grok")) return EditorPrefs.GetString("Omnisense_Grok_Key", "");
+            if (model.Contains("deepseek")) return EditorPrefs.GetString("Omnisense_DeepSeek_Key", "");
+            if (model.Contains("qwen")) return EditorPrefs.GetString("Omnisense_Qwen_Key", "");
+            if (model.Contains("glm")) return EditorPrefs.GetString("Omnisense_GLM_Key", "");
+            if (model.Contains("kimi")) return EditorPrefs.GetString("Omnisense_Kimi_Key", "");
             if (model == "self-hosted") return EditorPrefs.GetString("Omnisense_SelfHosted_Key", "");
             return "";
         }
@@ -1817,6 +1836,10 @@ try {
             if (model.Contains("claude")) return EditorPrefs.GetInt("Omnisense_Anthropic_MaxTokens", 4096);
             if (model.Contains("gemini")) return EditorPrefs.GetInt("Omnisense_Gemini_MaxTokens", 4096);
             if (model.Contains("grok")) return EditorPrefs.GetInt("Omnisense_Grok_MaxTokens", 4096);
+            if (model.Contains("deepseek")) return EditorPrefs.GetInt("Omnisense_DeepSeek_MaxTokens", 4096);
+            if (model.Contains("qwen")) return EditorPrefs.GetInt("Omnisense_Qwen_MaxTokens", 4096);
+            if (model.Contains("glm")) return EditorPrefs.GetInt("Omnisense_GLM_MaxTokens", 4096);
+            if (model.Contains("kimi")) return EditorPrefs.GetInt("Omnisense_Kimi_MaxTokens", 4096);
             if (model == "self-hosted") return EditorPrefs.GetInt("Omnisense_SelfHosted_MaxTokens", 4096);
             return 4096;
         }
@@ -1839,6 +1862,78 @@ try {
             _statusLabel.style.color = new StyleColor(new Color(0.3f, 0.9f, 0.3f));
             _statusLabel.text = msg;
             Debug.Log("[Omnisense-3D] " + msg);
+        }
+
+        private void SelectSelfHostedModel(string modelName)
+        {
+            EditorPrefs.SetString("Omnisense_SelfHosted_Model", modelName);
+            _modelSelector.value = "self-hosted";
+        }
+
+        private void ShowModelMenu()
+        {
+            var menu = new GenericMenu();
+            string currentModel = _modelSelector.value;
+
+            // OpenAI
+            menu.AddItem(new GUIContent("open ai/gpt-5.5-thinking"), currentModel == "gpt-5.5-thinking", () => _modelSelector.value = "gpt-5.5-thinking");
+            menu.AddItem(new GUIContent("open ai/gpt-5.5-pro"), currentModel == "gpt-5.5-pro", () => _modelSelector.value = "gpt-5.5-pro");
+            menu.AddItem(new GUIContent("open ai/gpt-5.5"), currentModel == "gpt-5.5", () => _modelSelector.value = "gpt-5.5");
+            menu.AddItem(new GUIContent("open ai/gpt-5.5-instant"), currentModel == "gpt-5.5-instant", () => _modelSelector.value = "gpt-5.5-instant");
+            menu.AddItem(new GUIContent("open ai/gpt-5.4"), currentModel == "gpt-5.4", () => _modelSelector.value = "gpt-5.4");
+            menu.AddItem(new GUIContent("open ai/gpt-5.4-mini"), currentModel == "gpt-5.4-mini", () => _modelSelector.value = "gpt-5.4-mini");
+            menu.AddItem(new GUIContent("open ai/gpt-5.4-nano"), currentModel == "gpt-5.4-nano", () => _modelSelector.value = "gpt-5.4-nano");
+            menu.AddItem(new GUIContent("open ai/o3-mini"), currentModel == "o3-mini", () => _modelSelector.value = "o3-mini");
+
+            // Claude
+            menu.AddItem(new GUIContent("claude/claude-fable-5"), currentModel == "claude-fable-5", () => _modelSelector.value = "claude-fable-5");
+            menu.AddItem(new GUIContent("claude/claude-mythos-5"), currentModel == "claude-mythos-5", () => _modelSelector.value = "claude-mythos-5");
+            menu.AddItem(new GUIContent("claude/claude-opus-4.8"), currentModel == "claude-opus-4.8", () => _modelSelector.value = "claude-opus-4.8");
+            menu.AddItem(new GUIContent("claude/claude-sonnet-4.6"), currentModel == "claude-sonnet-4.6", () => _modelSelector.value = "claude-sonnet-4.6");
+            menu.AddItem(new GUIContent("claude/claude-haiku-4.5"), currentModel == "claude-haiku-4.5", () => _modelSelector.value = "claude-haiku-4.5");
+            menu.AddItem(new GUIContent("claude/claude-4.7-opus"), currentModel == "claude-4.7-opus", () => _modelSelector.value = "claude-4.7-opus");
+            menu.AddItem(new GUIContent("claude/claude-4.6-sonnet"), currentModel == "claude-4.6-sonnet", () => _modelSelector.value = "claude-4.6-sonnet");
+            menu.AddItem(new GUIContent("claude/claude-4.5-haiku"), currentModel == "claude-4.5-haiku", () => _modelSelector.value = "claude-4.5-haiku");
+
+            // Gemini
+            menu.AddItem(new GUIContent("gemini/gemini-3.1-pro"), currentModel == "gemini-3.1-pro", () => _modelSelector.value = "gemini-3.1-pro");
+            menu.AddItem(new GUIContent("gemini/gemini-3.5-flash"), currentModel == "gemini-3.5-flash", () => _modelSelector.value = "gemini-3.5-flash");
+            menu.AddItem(new GUIContent("gemini/gemini-3-flash"), currentModel == "gemini-3-flash", () => _modelSelector.value = "gemini-3-flash");
+            menu.AddItem(new GUIContent("gemini/gemini-3.1-flash"), currentModel == "gemini-3.1-flash", () => _modelSelector.value = "gemini-3.1-flash");
+            menu.AddItem(new GUIContent("gemini/gemini-3.1-flash-lite"), currentModel == "gemini-3.1-flash-lite", () => _modelSelector.value = "gemini-3.1-flash-lite");
+            menu.AddItem(new GUIContent("gemini/gemini-2.5-pro"), currentModel == "gemini-2.5-pro", () => _modelSelector.value = "gemini-2.5-pro");
+            menu.AddItem(new GUIContent("gemini/gemini-2.5-flash"), currentModel == "gemini-2.5-flash", () => _modelSelector.value = "gemini-2.5-flash");
+            menu.AddItem(new GUIContent("gemini/gemini-2.5-flash-lite"), currentModel == "gemini-2.5-flash-lite", () => _modelSelector.value = "gemini-2.5-flash-lite");
+
+            // Grok
+            menu.AddItem(new GUIContent("grok/grok-4.3"), currentModel == "grok-4.3", () => _modelSelector.value = "grok-4.3");
+            menu.AddItem(new GUIContent("grok/grok-build-0.1"), currentModel == "grok-build-0.1", () => _modelSelector.value = "grok-build-0.1");
+            menu.AddItem(new GUIContent("grok/grok-latest"), currentModel == "grok-latest", () => _modelSelector.value = "grok-latest");
+            menu.AddItem(new GUIContent("grok/grok-4.3-beta"), currentModel == "grok-4.3-beta", () => _modelSelector.value = "grok-4.3-beta");
+            menu.AddItem(new GUIContent("grok/grok-4.20-beta-2"), currentModel == "grok-4.20-beta-2", () => _modelSelector.value = "grok-4.20-beta-2");
+            menu.AddItem(new GUIContent("grok/grok-4.20-fast"), currentModel == "grok-4.20-fast", () => _modelSelector.value = "grok-4.20-fast");
+
+            // Self Hosted
+            string selfHostedModel = EditorPrefs.GetString("Omnisense_SelfHosted_Model", "llama3:8b");
+            menu.AddItem(new GUIContent($"self hosted/{selfHostedModel} (Configured)"), currentModel == "self-hosted", () => SelectSelfHostedModel(selfHostedModel));
+            menu.AddSeparator("self hosted/");
+            menu.AddItem(new GUIContent("self hosted/llama3:8b"), false, () => SelectSelfHostedModel("llama3:8b"));
+            menu.AddItem(new GUIContent("self hosted/llama3.1:8b"), false, () => SelectSelfHostedModel("llama3.1:8b"));
+            menu.AddItem(new GUIContent("self hosted/mistral:7b"), false, () => SelectSelfHostedModel("mistral:7b"));
+            menu.AddItem(new GUIContent("self hosted/phi3:medium"), false, () => SelectSelfHostedModel("phi3:medium"));
+            menu.AddItem(new GUIContent("self hosted/qwen2.5:7b"), false, () => SelectSelfHostedModel("qwen2.5:7b"));
+            menu.AddItem(new GUIContent("self hosted/gemma2:9b"), false, () => SelectSelfHostedModel("gemma2:9b"));
+
+            // Other
+            menu.AddItem(new GUIContent("other/deepseek-chat"), currentModel == "deepseek-chat", () => _modelSelector.value = "deepseek-chat");
+            menu.AddItem(new GUIContent("other/deepseek-reasoner"), currentModel == "deepseek-reasoner", () => _modelSelector.value = "deepseek-reasoner");
+            menu.AddItem(new GUIContent("other/qwen-2.5-coder"), currentModel == "qwen-2.5-coder", () => _modelSelector.value = "qwen-2.5-coder");
+            menu.AddItem(new GUIContent("other/qwen-2.5-instruct"), currentModel == "qwen-2.5-instruct", () => _modelSelector.value = "qwen-2.5-instruct");
+            menu.AddItem(new GUIContent("other/glm-4"), currentModel == "glm-4", () => _modelSelector.value = "glm-4");
+            menu.AddItem(new GUIContent("other/kimi-k2"), currentModel == "kimi-k2", () => _modelSelector.value = "kimi-k2");
+            menu.AddItem(new GUIContent("other/self-hosted"), currentModel == "self-hosted", () => _modelSelector.value = "self-hosted");
+
+            menu.DropDown(_modelSelector.worldBound);
         }
 
         private void SetLoadingState(bool loading)
