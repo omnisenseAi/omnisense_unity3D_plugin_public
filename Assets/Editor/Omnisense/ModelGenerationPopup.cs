@@ -55,6 +55,7 @@ namespace Omnisense
         private TextField _pathField;
         private TextField _jsFileField;
         private Button _convertBtn;
+        private Toggle _orchestratorToggle;
 
         // Networking requests
         private UnityWebRequest _activeLlmRequest;
@@ -208,6 +209,10 @@ namespace Omnisense
             _providerField.RegisterValueChangedCallback(evt => {
                 EditorPrefs.SetString("Omnisense_ModelGen_Provider", evt.newValue);
                 UpdateModelSelectorOptions(evt.newValue);
+                if (_orchestratorToggle != null)
+                {
+                    _orchestratorToggle.style.display = evt.newValue == "Three.js Code Generator" ? DisplayStyle.None : DisplayStyle.Flex;
+                }
             });
 
             _modelSelector.RegisterValueChangedCallback(evt => {
@@ -253,6 +258,18 @@ namespace Omnisense
             UpdateModelSelectorOptions(savedProvider);
 
             settingsContent.Add(dropdownsRow);
+
+            _orchestratorToggle = new Toggle("Use LLM Prompt Orchestration") { value = EditorPrefs.GetBool("Omnisense_ModelGen_UseOrchestrator", true) };
+            _orchestratorToggle.style.unityFontStyleAndWeight = FontStyle.Bold;
+            _orchestratorToggle.style.color = new StyleColor(new Color(0.8f, 0.8f, 0.8f));
+            _orchestratorToggle.style.fontSize = 10;
+            _orchestratorToggle.style.marginBottom = 6;
+            _orchestratorToggle.style.flexShrink = 0;
+            _orchestratorToggle.RegisterValueChangedCallback(evt => {
+                EditorPrefs.SetBool("Omnisense_ModelGen_UseOrchestrator", evt.newValue);
+            });
+            _orchestratorToggle.style.display = savedProvider == "Three.js Code Generator" ? DisplayStyle.None : DisplayStyle.Flex;
+            settingsContent.Add(_orchestratorToggle);
 
             // Path & Conversion settings row
             var pathContainer = new VisualElement();
@@ -888,7 +905,21 @@ namespace Omnisense
             PopulateSessionsList();
             RenderActiveSessionMessages();
 
-            StartLlmOrchestrator(promptText, attachedPath);
+            string providerMode = _providerField.value;
+            bool useOrchestrator = providerMode == "Three.js Code Generator" || _orchestratorToggle.value;
+
+            if (!useOrchestrator)
+            {
+                if (!string.IsNullOrEmpty(attachedPath))
+                {
+                    OmnisenseLogger.LogWarning("[3D Model Generator] Reference image attached but Orchestrator is disabled. Reference image content will not be processed.", "3D_MODEL_GEN");
+                }
+                TriggerCloudModelGeneration("Direct prompt execution (No Orchestration).", promptText);
+            }
+            else
+            {
+                StartLlmOrchestrator(promptText, attachedPath);
+            }
         }
 
         private void StartLlmOrchestrator(string userPrompt, string attachedPath)

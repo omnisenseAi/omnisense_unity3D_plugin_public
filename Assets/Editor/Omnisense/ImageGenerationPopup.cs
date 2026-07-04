@@ -53,8 +53,7 @@ namespace Omnisense
         private DropdownField _styleField;
         private DropdownField _providerField;
         private DropdownField _llmModelField;
-        private IntegerField _widthField;
-        private IntegerField _heightField;
+        private DropdownField _dimensionField;
         private TextField _pathField;
         private string _lastGeneratedPath = "";
 
@@ -195,7 +194,7 @@ namespace Omnisense
 
             var providerContainer = new VisualElement { style = { width = Length.Percent(32) } };
             providerContainer.Add(new Label("AI Generator:") { style = { unityFontStyleAndWeight = FontStyle.Bold, color = new StyleColor(new Color(0.8f, 0.8f, 0.8f)), fontSize = 10 } });
-            _providerField = new DropdownField { choices = new List<string> { "OpenAI Image", "Google Imagen" }, value = "OpenAI Image" };
+            _providerField = new DropdownField { choices = new List<string> { "OpenAI Image", "Google Imagen" } };
             providerContainer.Add(_providerField);
             dropdownsRow.Add(providerContainer);
 
@@ -203,6 +202,7 @@ namespace Omnisense
             llmContainer.Add(new Label("Prompt Orchestrator:") { style = { unityFontStyleAndWeight = FontStyle.Bold, color = new StyleColor(new Color(0.8f, 0.8f, 0.8f)), fontSize = 10 } });
             _llmModelField = new DropdownField {
                 choices = new List<string> {
+                    "None",
                     "gpt-5.5-thinking", "gpt-5.5-pro", "gpt-5.5", "gpt-5.5-instant",
                     "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano", "o3-mini",
                     "claude-fable-5", "claude-mythos-5", "claude-opus-4.8", "claude-sonnet-4.6", "claude-haiku-4.5",
@@ -245,13 +245,20 @@ namespace Omnisense
 
             var sizeContainer = new VisualElement { style = { width = Length.Percent(32) } };
             sizeContainer.Add(new Label("Dimensions:") { style = { unityFontStyleAndWeight = FontStyle.Bold, color = new StyleColor(new Color(0.8f, 0.8f, 0.8f)), fontSize = 10 } });
-            var dimRow = new VisualElement { style = { flexDirection = FlexDirection.Row, alignItems = Align.Center } };
-            _widthField = new IntegerField { value = 1024, style = { width = 45 } };
-            _heightField = new IntegerField { value = 1024, style = { width = 45 } };
-            dimRow.Add(_widthField);
-            dimRow.Add(new Label("x") { style = { marginLeft = 2, marginRight = 2, color = new StyleColor(new Color(0.7f, 0.7f, 0.7f)) } });
-            dimRow.Add(_heightField);
-            sizeContainer.Add(dimRow);
+            _dimensionField = new DropdownField();
+            _dimensionField.RegisterValueChangedCallback(evt => {
+                if (evt.newValue == null) return;
+                string currentProvider = _providerField.value;
+                if (currentProvider == "OpenAI Image")
+                {
+                    EditorPrefs.SetString("Omnisense_ImgGen_DimOpenAI", evt.newValue);
+                }
+                else
+                {
+                    EditorPrefs.SetString("Omnisense_ImgGen_DimImagen", evt.newValue);
+                }
+            });
+            sizeContainer.Add(_dimensionField);
             sizePathRow.Add(sizeContainer);
 
             var pathContainer = new VisualElement { style = { width = Length.Percent(65) } };
@@ -281,6 +288,17 @@ namespace Omnisense
             sizePathRow.Add(pathContainer);
 
             settingsFoldout.Add(sizePathRow);
+
+            // Register provider value callback and initialize selections
+            _providerField.RegisterValueChangedCallback(evt => {
+                EditorPrefs.SetString("Omnisense_ImgGen_Provider", evt.newValue);
+                UpdateDimensionChoices(evt.newValue);
+            });
+
+            string savedProvider = EditorPrefs.GetString("Omnisense_ImgGen_Provider", "OpenAI Image");
+            _providerField.value = savedProvider;
+            UpdateDimensionChoices(savedProvider);
+
             workspace.Add(settingsFoldout);
 
             // Drag-and-drop reference image thumbnail overlay
@@ -820,7 +838,18 @@ namespace Omnisense
             PopulateSessionsList();
             RenderActiveSessionMessages();
 
-            StartLlmOrchestrator(promptText, attachedPath);
+            if (_llmModelField.value == "None")
+            {
+                if (!string.IsNullOrEmpty(attachedPath))
+                {
+                    OmnisenseLogger.LogWarning("[Image Generator] Reference image attached but Orchestrator is set to None. Reference image content will not be processed.", "IMAGE_GEN");
+                }
+                TriggerImageGeneration("Direct prompt execution (No Orchestration).", promptText);
+            }
+            else
+            {
+                StartLlmOrchestrator(promptText, attachedPath);
+            }
         }
 
         private void StartLlmOrchestrator(string userPrompt, string attachedPath)
@@ -1020,8 +1049,56 @@ namespace Omnisense
             else if (selectedStyle == "Sci-Fi / Cyberpunk") styleSuffix = ", cyberpunk style, neon lighting, sci-fi concept art";
 
             string finalPrompt = prompt + styleSuffix;
-            int width = _widthField.value;
-            int height = _heightField.value;
+            int width = 1024;
+            int height = 1024;
+
+            string dimVal = _dimensionField.value;
+            if (provider == "OpenAI Image")
+            {
+                if (dimVal == "1792x1024 (Landscape 16:9)")
+                {
+                    width = 1792;
+                    height = 1024;
+                }
+                else if (dimVal == "1024x1792 (Portrait 9:16)")
+                {
+                    width = 1024;
+                    height = 1792;
+                }
+                else
+                {
+                    width = 1024;
+                    height = 1024;
+                }
+            }
+            else // Google Imagen
+            {
+                if (dimVal == "4:3 (Landscape)")
+                {
+                    width = 1024;
+                    height = 768;
+                }
+                else if (dimVal == "16:9 (Widescreen)")
+                {
+                    width = 1024;
+                    height = 576;
+                }
+                else if (dimVal == "3:4 (Portrait)")
+                {
+                    width = 768;
+                    height = 1024;
+                }
+                else if (dimVal == "9:16 (Tall)")
+                {
+                    width = 576;
+                    height = 1024;
+                }
+                else
+                {
+                    width = 1024;
+                    height = 1024;
+                }
+            }
 
             if (provider == "OpenAI Image")
             {
@@ -1036,18 +1113,32 @@ namespace Omnisense
         private void SendOpenAIImageRequest(string finalPrompt, int width, int height, string apiKey)
         {
             string url = "https://api.openai.com/v1/images/generations";
-            string model = "dall-e-2";
-            if ((width == 1024 && height == 1024) || (width == 1024 && height == 1792) || (width == 1792 && height == 1024) ||
-                (width == 1536 && height == 1024) || (width == 1024 && height == 1536))
+            string model = "gpt-image-1";
+
+            // GPT Image 1 only supports 1024x1024, 1792x1024, or 1024x1792
+            string sizeStr = "1024x1024";
+            double aspect = (double)width / height;
+            if (aspect > 1.3)
             {
-                model = "gpt-image-1";
+                sizeStr = "1792x1024";
+                OmnisenseLogger.Log($"[Image Generator] GPT-Image-1 selected. Snapping dimensions to landscape: {sizeStr} (Requested: {width}x{height})", "IMAGE_GEN");
+            }
+            else if (aspect < 0.77)
+            {
+                sizeStr = "1024x1792";
+                OmnisenseLogger.Log($"[Image Generator] GPT-Image-1 selected. Snapping dimensions to portrait: {sizeStr} (Requested: {width}x{height})", "IMAGE_GEN");
+            }
+            else
+            {
+                sizeStr = "1024x1024";
+                OmnisenseLogger.Log($"[Image Generator] GPT-Image-1 selected. Snapping dimensions to square: {sizeStr} (Requested: {width}x{height})", "IMAGE_GEN");
             }
 
             string body = "{" +
                 $"\"model\":\"{model}\"," +
                 $"\"prompt\":\"{JsonEscape(finalPrompt)}\"," +
                 $"\"n\":1," +
-                $"\"size\":\"{width}x{height}\"" +
+                $"\"size\":\"{sizeStr}\"" +
                 "}";
 
             OmnisenseLogger.Log($"[Image Generator] Sending OpenAI Image Request. URL: {url}\nPayload: {body}", "IMAGE_GEN");
@@ -1400,6 +1491,9 @@ namespace Omnisense
             var menu = new GenericMenu();
             string currentModel = _llmModelField.value;
 
+            menu.AddItem(new GUIContent("None"), currentModel == "None", () => _llmModelField.value = "None");
+            menu.AddSeparator("");
+
             // OpenAI
             menu.AddItem(new GUIContent("open ai/gpt-5.5-thinking"), currentModel == "gpt-5.5-thinking", () => _llmModelField.value = "gpt-5.5-thinking");
             menu.AddItem(new GUIContent("open ai/gpt-5.5-pro"), currentModel == "gpt-5.5-pro", () => _llmModelField.value = "gpt-5.5-pro");
@@ -1468,8 +1562,7 @@ namespace Omnisense
             _styleField.SetEnabled(!loading);
             _providerField.SetEnabled(!loading);
             _llmModelField.SetEnabled(!loading);
-            _widthField.SetEnabled(!loading);
-            _heightField.SetEnabled(!loading);
+            _dimensionField.SetEnabled(!loading);
             _pathField.SetEnabled(!loading);
             if (_attachBtn != null) _attachBtn.SetEnabled(!loading);
         }
@@ -1485,6 +1578,36 @@ namespace Omnisense
             if (string.IsNullOrEmpty(str)) return "";
             if (str.Length <= maxLen) return str;
             return str.Substring(0, maxLen - 3) + "...";
+        }
+
+        private void UpdateDimensionChoices(string provider)
+        {
+            if (_dimensionField == null) return;
+
+            if (provider == "OpenAI Image")
+            {
+                _dimensionField.choices = new List<string> {
+                    "1024x1024 (Square 1:1)",
+                    "1792x1024 (Landscape 16:9)",
+                    "1024x1792 (Portrait 9:16)"
+                };
+                string savedVal = EditorPrefs.GetString("Omnisense_ImgGen_DimOpenAI", "1024x1024 (Square 1:1)");
+                if (_dimensionField.choices.Contains(savedVal)) _dimensionField.value = savedVal;
+                else _dimensionField.value = "1024x1024 (Square 1:1)";
+            }
+            else // Google Imagen
+            {
+                _dimensionField.choices = new List<string> {
+                    "1:1 (Square)",
+                    "4:3 (Landscape)",
+                    "16:9 (Widescreen)",
+                    "3:4 (Portrait)",
+                    "9:16 (Tall)"
+                };
+                string savedVal = EditorPrefs.GetString("Omnisense_ImgGen_DimImagen", "1:1 (Square)");
+                if (_dimensionField.choices.Contains(savedVal)) _dimensionField.value = savedVal;
+                else _dimensionField.value = "1:1 (Square)";
+            }
         }
     }
 
