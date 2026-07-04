@@ -44,6 +44,15 @@ With the launch of Unity 6.2, Unity officially retired the standalone "Unity Mus
 * **Unity AI**: Generates assets directly or drops scripts in-place, which can disrupt active game states or lead to compile blockages that developers must manually sort out.
 * **OmniSense**: Utilizes high-throughput **Batch Transactions** (`scene/execute_transactions`) to apply scene modifications. All changes (file edits, component additions, scene instantiations) are staged in a **Deferred Review Panel**, allowing developers to review, select, apply, or reject changes collectively at the end of the turn with a turn-level undo database.
 
+### E. Integrated 3D Model Generation Pipeline (Three.js vs. Meshy vs. Tripo3D)
+* **Three.js Code Generator**: Uses the developer's selected LLM model to write executable JavaScript, converting it to glTF locally using the Node wrapper.
+* **Meshy AI & Tripo3D (Dynamic Parameter Settings)**:
+  * Resolved the UI issue where selecting `Meshy AI` or `Tripo3D` would display default LLM model names (like `gpt5` / `gpt-5.4-mini`).
+  * The second dropdown now dynamically updates based on the **AI Provider** choice:
+    * Selecting **Meshy AI** transitions the dropdown label to **"Meshy Style:"** and populates it with Meshy art style selections (`realistic`, `cartoon`, `sculpture`, `voxel`, `poly`), which are sent to the openapi v2 `art_style` parameter.
+    * Selecting **Tripo3D** transitions the dropdown label to **"Tripo Version:"** and populates it with Tripo model versions (`v2.5`, `v2.0`, `v1.0`), which are mapped to the task creation `model_version` parameter.
+  * The selected AI Provider and model/style preferences are fully persisted using `EditorPrefs` across assembly reloads, and the LLM prompt optimizer runs under a global context, ensuring consistent, high-fidelity text-to-3d generations.
+
 ---
 
 ## ⚖️ 2. The Distribution Model: Open Core

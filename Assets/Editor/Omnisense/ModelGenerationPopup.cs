@@ -57,8 +57,10 @@ namespace Omnisense
         private Button _convertBtn;
 
         // Networking requests
-        private UnityWebRequest _activeRequest;
-        private double _requestStartTime;
+        private UnityWebRequest _activeLlmRequest;
+        private double _llmRequestStartTime;
+        private UnityWebRequest _activeCloudRequest;
+        private double _cloudRequestStartTime;
         private string _pendingExplanation = "";
 
         // Polling states for 3D APIs
@@ -174,16 +176,19 @@ namespace Omnisense
             var settingsFoldout = new Foldout();
             settingsFoldout.value = false;
             settingsFoldout.text = "⚙ Generation Parameters";
-            settingsFoldout.style.backgroundColor = new StyleColor(new Color(0.14f, 0.15f, 0.17f));
-            settingsFoldout.style.paddingLeft = 6;
-            settingsFoldout.style.paddingRight = 6;
-            settingsFoldout.style.paddingTop = 6;
-            settingsFoldout.style.paddingBottom = 6;
-            settingsFoldout.style.marginBottom = 6;
-            settingsFoldout.style.borderTopLeftRadius = 4;
-            settingsFoldout.style.borderTopRightRadius = 4;
-            settingsFoldout.style.borderBottomLeftRadius = 4;
-            settingsFoldout.style.borderBottomRightRadius = 4;
+            settingsFoldout.style.flexShrink = 0;
+
+            var settingsContent = new VisualElement();
+            settingsContent.style.backgroundColor = new StyleColor(new Color(0.14f, 0.15f, 0.17f));
+            settingsContent.style.paddingLeft = 6;
+            settingsContent.style.paddingRight = 6;
+            settingsContent.style.paddingTop = 6;
+            settingsContent.style.paddingBottom = 6;
+            settingsContent.style.marginBottom = 6;
+            settingsContent.style.borderTopLeftRadius = 4;
+            settingsContent.style.borderTopRightRadius = 4;
+            settingsContent.style.borderBottomLeftRadius = 4;
+            settingsContent.style.borderBottomRightRadius = 4;
 
             var dropdownsRow = new VisualElement();
             dropdownsRow.style.flexDirection = FlexDirection.Row;
@@ -192,47 +197,62 @@ namespace Omnisense
 
             var providerContainer = new VisualElement { style = { width = Length.Percent(48) } };
             providerContainer.Add(new Label("AI Provider:") { style = { unityFontStyleAndWeight = FontStyle.Bold, color = new StyleColor(new Color(0.8f, 0.8f, 0.8f)), fontSize = 10 } });
-            _providerField = new DropdownField { choices = new List<string> { "Three.js Code Generator", "Meshy AI", "Tripo3D" }, value = "Three.js Code Generator" };
+            _providerField = new DropdownField { choices = new List<string> { "Three.js Code Generator", "Meshy AI", "Tripo3D" } };
             providerContainer.Add(_providerField);
             dropdownsRow.Add(providerContainer);
 
             var modelContainer = new VisualElement { style = { width = Length.Percent(48) } };
             var modelLabel = new Label("LLM Model:") { style = { unityFontStyleAndWeight = FontStyle.Bold, color = new StyleColor(new Color(0.8f, 0.8f, 0.8f)), fontSize = 10 } };
-            _modelSelector = new DropdownField {
-                choices = new List<string> {
-                    "gpt-5.5-thinking", "gpt-5.5-pro", "gpt-5.5", "gpt-5.5-instant",
-                    "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano", "o3-mini",
-                    "claude-fable-5", "claude-mythos-5", "claude-opus-4.8", "claude-sonnet-4.6", "claude-haiku-4.5",
-                    "claude-4.7-opus", "claude-4.6-sonnet", "claude-4.5-haiku",
-                    "gemini-3.1-pro", "gemini-3.5-flash", "gemini-3-flash", "gemini-3.1-flash", "gemini-3.1-flash-lite",
-                    "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite",
-                    "grok-4.3", "grok-build-0.1", "grok-latest",
-                    "grok-4.3-beta", "grok-4.20-beta-2", "grok-4.20-fast",
-                    "deepseek-chat", "deepseek-reasoner", "qwen-2.5-coder", "qwen-2.5-instruct", "glm-4", "kimi-k2",
-                    "self-hosted"
-                }
-            };
-            string savedModel = EditorPrefs.GetString("Omnisense_SelectedModel", "gpt-5.4-mini");
-            if (_modelSelector.choices.Contains(savedModel)) _modelSelector.value = savedModel;
-            else _modelSelector.value = "gpt-5.4-mini";
+            _modelSelector = new DropdownField();
+
+            _providerField.RegisterValueChangedCallback(evt => {
+                EditorPrefs.SetString("Omnisense_ModelGen_Provider", evt.newValue);
+                UpdateModelSelectorOptions(evt.newValue);
+            });
+
             _modelSelector.RegisterValueChangedCallback(evt => {
-                EditorPrefs.SetString("Omnisense_SelectedModel", evt.newValue);
+                if (evt.newValue == null) return;
+                string currentProvider = _providerField.value;
+                if (currentProvider == "Three.js Code Generator")
+                {
+                    EditorPrefs.SetString("Omnisense_ModelGen_LLMModel", evt.newValue);
+                    EditorPrefs.SetString("Omnisense_SelectedModel", evt.newValue);
+                }
+                else if (currentProvider == "Meshy AI")
+                {
+                    EditorPrefs.SetString("Omnisense_ModelGen_MeshyStyle", evt.newValue);
+                }
+                else if (currentProvider == "Tripo3D")
+                {
+                    EditorPrefs.SetString("Omnisense_ModelGen_TripoVersion", evt.newValue);
+                }
             });
 
             _modelSelector.RegisterCallback<PointerDownEvent>(evt => {
-                evt.StopPropagation();
-                ShowModelMenu();
+                if (_providerField.value == "Three.js Code Generator")
+                {
+                    evt.StopPropagation();
+                    ShowModelMenu();
+                }
             }, TrickleDown.TrickleDown);
 
             _modelSelector.RegisterCallback<MouseDownEvent>(evt => {
-                evt.StopPropagation();
-                ShowModelMenu();
+                if (_providerField.value == "Three.js Code Generator")
+                {
+                    evt.StopPropagation();
+                    ShowModelMenu();
+                }
             }, TrickleDown.TrickleDown);
+
             modelContainer.Add(modelLabel);
             modelContainer.Add(_modelSelector);
             dropdownsRow.Add(modelContainer);
 
-            settingsFoldout.Add(dropdownsRow);
+            string savedProvider = EditorPrefs.GetString("Omnisense_ModelGen_Provider", "Three.js Code Generator");
+            _providerField.value = savedProvider;
+            UpdateModelSelectorOptions(savedProvider);
+
+            settingsContent.Add(dropdownsRow);
 
             // Path & Conversion settings row
             var pathContainer = new VisualElement();
@@ -259,7 +279,7 @@ namespace Omnisense
             pathRow.Add(_pathField);
             pathRow.Add(browseBtn);
             pathContainer.Add(pathRow);
-            settingsFoldout.Add(pathContainer);
+            settingsContent.Add(pathContainer);
 
             // Manual THREE.js to glTF Converter section inside parameters folder
             var manualSection = new Foldout { text = "Manual THREE.js to glTF Converter", value = false, style = { marginTop = 8 } };
@@ -285,7 +305,8 @@ namespace Omnisense
             _convertBtn.style.color = new StyleColor(Color.white);
             manualSection.Add(_convertBtn);
 
-            settingsFoldout.Add(manualSection);
+            settingsContent.Add(manualSection);
+            settingsFoldout.Add(settingsContent);
             workspace.Add(settingsFoldout);
 
             // Reference attachment zone
@@ -303,6 +324,7 @@ namespace Omnisense
             _attachmentContainer.style.borderBottomLeftRadius = 4;
             _attachmentContainer.style.borderBottomRightRadius = 4;
             _attachmentContainer.style.display = DisplayStyle.None;
+            _attachmentContainer.style.flexShrink = 0;
 
             _attachmentThumbnail = new Image { style = { width = 30, height = 30, marginRight = 6 } };
             _attachmentLabel = new Label("") { style = { flexGrow = 1, fontSize = 10, color = new StyleColor(new Color(0.8f, 0.8f, 0.8f)) } };
@@ -325,12 +347,14 @@ namespace Omnisense
             _statusLabel.style.color = new StyleColor(new Color(0.6f, 0.6f, 0.6f));
             _statusLabel.style.fontSize = 10;
             _statusLabel.style.marginBottom = 4;
+            _statusLabel.style.flexShrink = 0;
             workspace.Add(_statusLabel);
 
             // Bottom Input row
             var chatInputRow = new VisualElement();
             chatInputRow.style.flexDirection = FlexDirection.Row;
             chatInputRow.style.alignItems = Align.Center;
+            chatInputRow.style.flexShrink = 0;
 
             _attachBtn = new Button(OnAttachClicked) { text = "📎" };
             _attachBtn.style.height = 35;
@@ -825,6 +849,8 @@ namespace Omnisense
         private void OnSendClicked()
         {
             string promptText = _promptField.value.Trim();
+            OmnisenseLogger.Log($"[3D Model Generator] Send button clicked. Prompt: \"{promptText}\", reference art: \"{_selectedReferencePath}\"", "3D_MODEL_GEN");
+
             if (string.IsNullOrEmpty(promptText) && string.IsNullOrEmpty(_selectedReferencePath))
             {
                 return;
@@ -867,7 +893,8 @@ namespace Omnisense
 
         private void StartLlmOrchestrator(string userPrompt, string attachedPath)
         {
-            string model = _modelSelector.value;
+            string providerMode = _providerField.value;
+            string model = providerMode == "Three.js Code Generator" ? _modelSelector.value : EditorPrefs.GetString("Omnisense_ModelGen_LLMModel", "gpt-5.4-mini");
             string apiKey = GetApiKey(model);
             if (string.IsNullOrEmpty(apiKey) && model != "self-hosted")
             {
@@ -885,8 +912,6 @@ namespace Omnisense
                 ShowError($"Unsupported LLM model: {model}");
                 return;
             }
-
-            string providerMode = _providerField.value;
             var messages = new List<LLMMessage>();
             messages.Add(new LLMMessage {
                 role = "system",
@@ -894,7 +919,7 @@ namespace Omnisense
                           $"CRITICAL: The active 3D Generation Provider is currently set to: '{providerMode}'.\n" +
                           "You MUST generate the required 3D asset in the first go. Do not just chat, ask questions, or propose ideas. Proceed to generate immediately:\n" +
                           "1. If the provider is 'Three.js Code Generator', you MUST write the complete, valid, executable Three.js JavaScript code that constructs the requested 3D model and populate it in 'threeJsCode'. Add all constructed meshes directly to the pre-provided 'scene' object (e.g. scene.add(mesh)). Do NOT instantiate a new scene, write window headers, or html wraps. Set 'optimizedPrompt' to \"\".\n" +
-                          "2. If the provider is 'Meshy AI' or 'Tripo3D', you MUST output a highly-detailed, optimized prompt describing the 3D asset (polycount, style, materials, colors) and populate it in 'optimizedPrompt'. Set 'threeJsCode' to \"\".\n\n" +
+                          "2. If the provider is 'Meshy AI' or 'Tripo3D', you MUST output a highly-detailed, optimized prompt describing the 3D asset and populate it in 'optimizedPrompt'. Set 'threeJsCode' to \"\". IMPORTANT: The 'optimizedPrompt' MUST be concise and strictly UNDER 800 characters total. Focus on high-impact keywords, main features, style, and materials to stay within this limit.\n\n" +
                           "Format your entire response strictly as a JSON block with no other markdown wrap, matching this schema:\n" +
                           "{\n  \"explanation\": \"your explanation here\",\n  \"threeJsCode\": \"your Three.js script here\",\n  \"optimizedPrompt\": \"your optimized 3D prompt here\"\n}"
             });
@@ -913,50 +938,55 @@ namespace Omnisense
             }
 
             int maxTokens = GetMaxTokens(model);
-            _activeRequest = providerImpl.BuildRequest(apiKey, model, messages, maxTokens);
-            _requestStartTime = EditorApplication.timeSinceStartup;
+            _activeLlmRequest = providerImpl.BuildRequest(apiKey, model, messages, maxTokens);
+            _llmRequestStartTime = EditorApplication.timeSinceStartup;
             EditorApplication.update += CheckLlmOrchestratorProgress;
-            _activeRequest.SendWebRequest();
+            _activeLlmRequest.SendWebRequest();
         }
 
         private void CheckLlmOrchestratorProgress()
         {
-            if (_activeRequest == null)
+            if (_activeLlmRequest == null)
             {
                 EditorApplication.update -= CheckLlmOrchestratorProgress;
                 return;
             }
 
-            double elapsed = EditorApplication.timeSinceStartup - _requestStartTime;
+            double elapsed = EditorApplication.timeSinceStartup - _llmRequestStartTime;
 
-            if (_activeRequest.isDone)
+            if (_activeLlmRequest.isDone)
             {
                 EditorApplication.update -= CheckLlmOrchestratorProgress;
                 SetLoadingState(false);
 
-                if (_activeRequest.result == UnityWebRequest.Result.Success)
+                if (_activeLlmRequest.result == UnityWebRequest.Result.Success)
                 {
-                    string rawResponse = _activeRequest.downloadHandler.text;
-                    string model = _modelSelector.value;
+                    string rawResponse = _activeLlmRequest.downloadHandler.text;
+                    string providerMode = _providerField.value;
+                    string model = providerMode == "Three.js Code Generator" ? _modelSelector.value : EditorPrefs.GetString("Omnisense_ModelGen_LLMModel", "gpt-5.4-mini");
                     ILLMProvider providerImpl = LLMProviderFactory.GetProvider(model);
                     string parsedContent = providerImpl.ParseResponseContent(rawResponse);
+                    OmnisenseLogger.Log($"[3D Model Generator] LLM orchestration request succeeded. Response content: {parsedContent}", "3D_MODEL_GEN");
 
                     ProcessOrchestratorReply(parsedContent);
                 }
                 else
                 {
-                    ShowError($"LLM Request Failed: {_activeRequest.error}");
+                    string err = _activeLlmRequest.downloadHandler?.text ?? _activeLlmRequest.error;
+                    OmnisenseLogger.LogError($"[3D Model Generator] LLM orchestration request failed. Error: {_activeLlmRequest.error}, Details: {err}", "3D_MODEL_GEN");
+                    ShowError($"LLM Request Failed: {_activeLlmRequest.error}");
                 }
-                _activeRequest.Dispose();
-                _activeRequest = null;
+                _activeLlmRequest.Dispose();
+                _activeLlmRequest = null;
             }
             else if (elapsed > 180)
             {
                 EditorApplication.update -= CheckLlmOrchestratorProgress;
-                _activeRequest.Abort();
-                _activeRequest.Dispose();
-                _activeRequest = null;
+                _activeLlmRequest.Abort();
+                _activeLlmRequest.Dispose();
+                _activeLlmRequest = null;
                 SetLoadingState(false);
+                OmnisenseLogger.LogError($"[3D Model Generator] LLM orchestration request timed out after {elapsed:F0} seconds.", "3D_MODEL_GEN");
                 ShowError($"LLM Request timed out after {elapsed:F0} seconds.");
             }
         }
@@ -1137,6 +1167,14 @@ namespace Omnisense
             _pendingExplanation = explanation;
             string provider = _providerField.value;
 
+            // Enforce prompt limits to prevent API payload errors
+            string cleanPrompt = prompt;
+            if (cleanPrompt.Length > 1000)
+            {
+                cleanPrompt = cleanPrompt.Substring(0, 1000);
+                OmnisenseLogger.LogWarning($"[3D Model Generator] Warning: Optimized prompt exceeded 1000 characters ({prompt.Length}). Truncated to stay within API limit.", "3D_MODEL_GEN");
+            }
+
             if (provider == "Meshy AI")
             {
                 string apiKey = EditorPrefs.GetString("Omnisense_Meshy_Key", "");
@@ -1149,24 +1187,28 @@ namespace Omnisense
                 SetLoadingState(true);
                 ShowStatus("Contacting Meshy AI to queue model generation...");
 
+                string artStyle = _modelSelector.value;
                 string url = "https://api.meshy.ai/openapi/v2/text-to-3d";
                 string body = "{" +
                     $"\"mode\":\"preview\"," +
-                    $"\"prompt\":\"{JsonEscape(prompt)}\"," +
-                    $"\"model_type\":\"standard\"" +
+                    $"\"prompt\":\"{JsonEscape(cleanPrompt)}\"," +
+                    $"\"art_style\":\"{artStyle}\"" +
                     "}";
 
+                OmnisenseLogger.Log($"[3D Model Generator] Triggering Meshy AI task. URL: {url}\nPayload: {body}", "3D_MODEL_GEN");
+
                 var req = new UnityWebRequest(url, "POST");
+                req.timeout = 60;
                 byte[] bodyRaw = System.Text.Encoding.UTF8.GetBytes(body);
                 req.uploadHandler = new UploadHandlerRaw(bodyRaw);
                 req.downloadHandler = new DownloadHandlerBuffer();
                 req.SetRequestHeader("Content-Type", "application/json");
                 req.SetRequestHeader("Authorization", "Bearer " + apiKey);
 
-                _activeRequest = req;
-                _requestStartTime = EditorApplication.timeSinceStartup;
+                _activeCloudRequest = req;
+                _cloudRequestStartTime = EditorApplication.timeSinceStartup;
                 EditorApplication.update += CheckMeshyRequestProgress;
-                _activeRequest.SendWebRequest();
+                _activeCloudRequest.SendWebRequest();
             }
             else if (provider == "Tripo3D")
             {
@@ -1180,23 +1222,34 @@ namespace Omnisense
                 SetLoadingState(true);
                 ShowStatus("Contacting Tripo3D to queue model generation...");
 
-                string url = "https://api.tripo3d.ai/v2/openapi/task";
+                string tripoVersion = _modelSelector.value;
+                string actualVersion = "v3.1-20260211";
+                if (tripoVersion == "v3.1") actualVersion = "v3.1-20260211";
+                else if (tripoVersion == "v3.0") actualVersion = "v3.0-20250812";
+                else if (tripoVersion == "v2.5") actualVersion = "v2.5-20250123";
+                else if (tripoVersion == "v2.0") actualVersion = "v2.0-20240919";
+                else if (tripoVersion == "v1.0") actualVersion = "v1.0-20240417";
+
+                string url = "https://openapi.tripo3d.ai/v3/generation/text-to-model";
                 string body = "{" +
-                    $"\"type\":\"text_to_model\"," +
-                    $"\"prompt\":\"{JsonEscape(prompt)}\"" +
+                    $"\"prompt\":\"{JsonEscape(cleanPrompt)}\"," +
+                    $"\"model\":\"{actualVersion}\"" +
                     "}";
 
+                OmnisenseLogger.Log($"[3D Model Generator] Triggering Tripo3D task (v3 API, mapped version: {actualVersion}). URL: {url}\nPayload: {body}", "3D_MODEL_GEN");
+
                 var req = new UnityWebRequest(url, "POST");
+                req.timeout = 60;
                 byte[] bodyRaw = System.Text.Encoding.UTF8.GetBytes(body);
                 req.uploadHandler = new UploadHandlerRaw(bodyRaw);
                 req.downloadHandler = new DownloadHandlerBuffer();
                 req.SetRequestHeader("Content-Type", "application/json");
                 req.SetRequestHeader("Authorization", "Bearer " + apiKey);
 
-                _activeRequest = req;
-                _requestStartTime = EditorApplication.timeSinceStartup;
+                _activeCloudRequest = req;
+                _cloudRequestStartTime = EditorApplication.timeSinceStartup;
                 EditorApplication.update += CheckTripoRequestProgress;
-                _activeRequest.SendWebRequest();
+                _activeCloudRequest.SendWebRequest();
             }
         }
 
@@ -1207,75 +1260,107 @@ namespace Omnisense
 
         private void CheckMeshyRequestProgress()
         {
-            if (_activeRequest == null)
+            if (_activeCloudRequest == null)
             {
                 EditorApplication.update -= CheckMeshyRequestProgress;
                 return;
             }
 
-            if (_activeRequest.isDone)
+            double elapsed = EditorApplication.timeSinceStartup - _cloudRequestStartTime;
+
+            if (_activeCloudRequest.isDone)
             {
                 EditorApplication.update -= CheckMeshyRequestProgress;
-                if (_activeRequest.result == UnityWebRequest.Result.Success)
+                if (_activeCloudRequest.result == UnityWebRequest.Result.Success)
                 {
-                    string json = _activeRequest.downloadHandler.text;
+                    string json = _activeCloudRequest.downloadHandler.text;
+                    OmnisenseLogger.Log($"[3D Model Generator] Meshy AI task creation request succeeded. Response JSON: {json}", "3D_MODEL_GEN");
                     var match = Regex.Match(json, @"""id""\s*:\s*""([^""]+)""");
                     if (match.Success)
                     {
                         string taskId = match.Groups[1].Value;
+                        OmnisenseLogger.Log($"[3D Model Generator] Extracted Meshy Task ID: {taskId}. Starting polling loop.", "3D_MODEL_GEN");
                         StartPolling(taskId, "Meshy AI");
                     }
                     else
                     {
+                        OmnisenseLogger.LogError($"[3D Model Generator] Failed to parse task ID from Meshy response JSON: {json}", "3D_MODEL_GEN");
                         SetLoadingState(false);
                         AddSystemErrorMessage(_pendingExplanation, $"Failed to parse task ID from Meshy response:\n{json}");
                     }
                 }
                 else
                 {
-                    string err = _activeRequest.downloadHandler?.text ?? _activeRequest.error;
+                    string err = _activeCloudRequest.downloadHandler?.text ?? _activeCloudRequest.error;
+                    OmnisenseLogger.LogError($"[3D Model Generator] Meshy Task creation request failed. Status: {_activeCloudRequest.responseCode}, Error: {_activeCloudRequest.error}, Details: {err}", "3D_MODEL_GEN");
                     SetLoadingState(false);
                     AddSystemErrorMessage(_pendingExplanation, $"Meshy Task creation failed: {err}");
                 }
-                _activeRequest.Dispose();
-                _activeRequest = null;
+                _activeCloudRequest.Dispose();
+                _activeCloudRequest = null;
+            }
+            else if (elapsed > 60)
+            {
+                EditorApplication.update -= CheckMeshyRequestProgress;
+                _activeCloudRequest.Abort();
+                _activeCloudRequest.Dispose();
+                _activeCloudRequest = null;
+                SetLoadingState(false);
+                OmnisenseLogger.LogError($"[3D Model Generator] Meshy Task creation request timed out after {elapsed:F0} seconds.", "3D_MODEL_GEN");
+                AddSystemErrorMessage(_pendingExplanation, $"Meshy task creation request timed out after {elapsed:F0} seconds.");
             }
         }
 
         private void CheckTripoRequestProgress()
         {
-            if (_activeRequest == null)
+            if (_activeCloudRequest == null)
             {
                 EditorApplication.update -= CheckTripoRequestProgress;
                 return;
             }
 
-            if (_activeRequest.isDone)
+            double elapsed = EditorApplication.timeSinceStartup - _cloudRequestStartTime;
+
+            if (_activeCloudRequest.isDone)
             {
                 EditorApplication.update -= CheckTripoRequestProgress;
-                if (_activeRequest.result == UnityWebRequest.Result.Success)
+                if (_activeCloudRequest.result == UnityWebRequest.Result.Success)
                 {
-                    string json = _activeRequest.downloadHandler.text;
+                    string json = _activeCloudRequest.downloadHandler.text;
+                    OmnisenseLogger.Log($"[3D Model Generator] Tripo3D task creation request succeeded. Response JSON: {json}", "3D_MODEL_GEN");
                     var match = Regex.Match(json, @"""task_id""\s*:\s*""([^""]+)""");
                     if (match.Success)
                     {
                         string taskId = match.Groups[1].Value;
+                        OmnisenseLogger.Log($"[3D Model Generator] Extracted Tripo3D Task ID: {taskId}. Starting polling loop.", "3D_MODEL_GEN");
                         StartPolling(taskId, "Tripo3D");
                     }
                     else
                     {
+                        OmnisenseLogger.LogError($"[3D Model Generator] Failed to parse task ID from Tripo3D response JSON: {json}", "3D_MODEL_GEN");
                         SetLoadingState(false);
                         AddSystemErrorMessage(_pendingExplanation, $"Failed to parse task ID from Tripo3D response:\n{json}");
                     }
                 }
                 else
                 {
-                    string err = _activeRequest.downloadHandler?.text ?? _activeRequest.error;
+                    string err = _activeCloudRequest.downloadHandler?.text ?? _activeCloudRequest.error;
+                    OmnisenseLogger.LogError($"[3D Model Generator] Tripo3D Task creation request failed. Status: {_activeCloudRequest.responseCode}, Error: {_activeCloudRequest.error}, Details: {err}", "3D_MODEL_GEN");
                     SetLoadingState(false);
                     AddSystemErrorMessage(_pendingExplanation, $"Tripo3D Task creation failed: {err}");
                 }
-                _activeRequest.Dispose();
-                _activeRequest = null;
+                _activeCloudRequest.Dispose();
+                _activeCloudRequest = null;
+            }
+            else if (elapsed > 60)
+            {
+                EditorApplication.update -= CheckTripoRequestProgress;
+                _activeCloudRequest.Abort();
+                _activeCloudRequest.Dispose();
+                _activeCloudRequest = null;
+                SetLoadingState(false);
+                OmnisenseLogger.LogError($"[3D Model Generator] Tripo3D Task creation request timed out after {elapsed:F0} seconds.", "3D_MODEL_GEN");
+                AddSystemErrorMessage(_pendingExplanation, $"Tripo3D task creation request timed out after {elapsed:F0} seconds.");
             }
         }
 
@@ -1287,6 +1372,7 @@ namespace Omnisense
             _pollAttempts = 0;
             SetLoadingState(true);
             ShowStatus("Task queued. Generating model (1-3 minutes)...");
+            OmnisenseLogger.Log($"[3D Model Generator] Initializing task polling loop for provider '{provider}'. Task ID: {taskId}", "3D_MODEL_GEN");
             EditorApplication.update += PollTaskStatus;
         }
 
@@ -1299,6 +1385,7 @@ namespace Omnisense
             _pollAttempts++;
             if (_pollAttempts > 60)
             {
+                OmnisenseLogger.LogError($"[3D Model Generator] Task polling timed out after {_pollAttempts} attempts.", "3D_MODEL_GEN");
                 EditorApplication.update -= PollTaskStatus;
                 SetLoadingState(false);
                 AddSystemErrorMessage(_pendingExplanation, "Task timed out during remote generation.");
@@ -1314,9 +1401,11 @@ namespace Omnisense
             }
             else if (_pollingProvider == "Tripo3D")
             {
-                url = $"https://api.tripo3d.ai/v2/openapi/task/{_taskId}";
+                url = $"https://openapi.tripo3d.ai/v3/tasks/{_taskId}";
                 apiKey = EditorPrefs.GetString("Omnisense_Tripo3D_Key", "");
             }
+
+            OmnisenseLogger.Log($"[3D Model Generator] Polling {_pollingProvider} (Attempt {_pollAttempts}). URL: {url}", "3D_MODEL_GEN");
 
             var req = UnityWebRequest.Get(url);
             req.SetRequestHeader("Authorization", "Bearer " + apiKey);
@@ -1325,7 +1414,7 @@ namespace Omnisense
             {
                 if (req.result != UnityWebRequest.Result.Success)
                 {
-                    Debug.LogWarning($"[Omnisense-3D] Polling error: {req.error}");
+                    OmnisenseLogger.LogWarning($"[3D Model Generator] Polling request error. Status: {req.responseCode}, Error: {req.error}", "3D_MODEL_GEN");
                     req.Dispose();
                     return;
                 }
@@ -1341,6 +1430,7 @@ namespace Omnisense
                     {
                         string status = statusMatch.Groups[1].Value;
                         string progress = progressMatch.Success ? progressMatch.Groups[1].Value : "0";
+                        OmnisenseLogger.Log($"[3D Model Generator] Meshy AI Task state: {status}, Progress: {progress}%", "3D_MODEL_GEN");
                         ShowStatus($"Generating: {progress}% ({status})... (Attempt {_pollAttempts})");
 
                         if (status == "SUCCEEDED")
@@ -1350,16 +1440,19 @@ namespace Omnisense
                             if (glbMatch.Success)
                             {
                                 string glbUrl = glbMatch.Groups[1].Value.Replace("\\/", "/");
+                                OmnisenseLogger.Log($"[3D Model Generator] Meshy AI task completed. GLB URL: {glbUrl}", "3D_MODEL_GEN");
                                 DownloadModelBytes(glbUrl, "glb");
                             }
                             else
                             {
+                                OmnisenseLogger.LogError($"[3D Model Generator] Completed Meshy response is missing glb URL: {json}", "3D_MODEL_GEN");
                                 SetLoadingState(false);
                                 AddSystemErrorMessage(_pendingExplanation, "Failed to find GLB file URL in completed task response.");
                             }
                         }
                         else if (status == "FAILED")
                         {
+                            OmnisenseLogger.LogError($"[3D Model Generator] Meshy AI task failed on server side. Response JSON: {json}", "3D_MODEL_GEN");
                             EditorApplication.update -= PollTaskStatus;
                             SetLoadingState(false);
                             AddSystemErrorMessage(_pendingExplanation, "Generation failed on Meshy AI server.");
@@ -1368,33 +1461,45 @@ namespace Omnisense
                 }
                 else if (_pollingProvider == "Tripo3D")
                 {
-                    var statusMatch = Regex.Match(json, @"""status""\s*:\s*""([^""]+)""");
-                    if (statusMatch.Success)
+                    int dataIndex = json.IndexOf("\"data\"");
+                    if (dataIndex >= 0)
                     {
-                        string status = statusMatch.Groups[1].Value;
-                        ShowStatus($"Generating: {status}... (Attempt {_pollAttempts})");
+                        var statusMatch = Regex.Match(json.Substring(dataIndex), @"""status""\s*:\s*""([^""]+)""");
+                        if (statusMatch.Success)
+                        {
+                            string status = statusMatch.Groups[1].Value;
+                            OmnisenseLogger.Log($"[3D Model Generator] Tripo3D Task state: {status}", "3D_MODEL_GEN");
+                            ShowStatus($"Generating: {status}... (Attempt {_pollAttempts})");
 
-                        if (status == "success")
-                        {
-                            EditorApplication.update -= PollTaskStatus;
-                            var modelMatch = Regex.Match(json, @"""model""\s*:\s*""([^""]+)""");
-                            if (modelMatch.Success)
+                            if (status == "success")
                             {
-                                string glbUrl = modelMatch.Groups[1].Value.Replace("\\/", "/");
-                                DownloadModelBytes(glbUrl, "glb");
+                                EditorApplication.update -= PollTaskStatus;
+                                var modelMatch = Regex.Match(json, @"""model_url""\s*:\s*""([^""]+)""");
+                                if (modelMatch.Success)
+                                {
+                                    string glbUrl = modelMatch.Groups[1].Value.Replace("\\/", "/");
+                                    OmnisenseLogger.Log($"[3D Model Generator] Tripo3D task completed. GLB URL: {glbUrl}", "3D_MODEL_GEN");
+                                    DownloadModelBytes(glbUrl, "glb");
+                                }
+                                else
+                                {
+                                    OmnisenseLogger.LogError($"[3D Model Generator] Completed Tripo3D response is missing model_url GLB link: {json}", "3D_MODEL_GEN");
+                                    SetLoadingState(false);
+                                    AddSystemErrorMessage(_pendingExplanation, "Failed to find GLB file model_url in completed task response.");
+                                }
                             }
-                            else
+                            else if (status == "failed")
                             {
+                                OmnisenseLogger.LogError($"[3D Model Generator] Tripo3D task failed on server side. Response JSON: {json}", "3D_MODEL_GEN");
+                                EditorApplication.update -= PollTaskStatus;
                                 SetLoadingState(false);
-                                AddSystemErrorMessage(_pendingExplanation, "Failed to find GLB file URL in completed task response.");
+                                AddSystemErrorMessage(_pendingExplanation, "Generation failed on Tripo3D server.");
                             }
                         }
-                        else if (status == "failed")
-                        {
-                            EditorApplication.update -= PollTaskStatus;
-                            SetLoadingState(false);
-                            AddSystemErrorMessage(_pendingExplanation, "Generation failed on Tripo3D server.");
-                        }
+                    }
+                    else
+                    {
+                        OmnisenseLogger.LogError($"[3D Model Generator] Tripo3D polling response lacks 'data' property: {json}", "3D_MODEL_GEN");
                     }
                 }
             };
@@ -1403,6 +1508,7 @@ namespace Omnisense
         private void DownloadModelBytes(string url, string format)
         {
             ShowStatus("Downloading model file...");
+            OmnisenseLogger.Log($"[3D Model Generator] Downloading model file from URL: {url}", "3D_MODEL_GEN");
             var req = UnityWebRequest.Get(url);
             var op = req.SendWebRequest();
             op.completed += (o) =>
@@ -1411,10 +1517,12 @@ namespace Omnisense
                 if (req.result == UnityWebRequest.Result.Success)
                 {
                     byte[] bytes = req.downloadHandler.data;
+                    OmnisenseLogger.Log($"[3D Model Generator] Downloaded model payload successfully. Size: {bytes.Length} bytes.", "3D_MODEL_GEN");
                     SaveAndImportModel(bytes, format);
                 }
                 else
                 {
+                    OmnisenseLogger.LogError($"[3D Model Generator] Model download failed. Error: {req.error}, Status Code: {req.responseCode}", "3D_MODEL_GEN");
                     AddSystemErrorMessage(_pendingExplanation, $"Failed to download model: {req.error}");
                 }
                 req.Dispose();
@@ -1472,6 +1580,7 @@ namespace Omnisense
                 File.WriteAllBytes(absoluteFilePath, bytes);
                 AssetDatabase.ImportAsset(finalPath);
                 AssetDatabase.Refresh();
+                OmnisenseLogger.Log($"[3D Model Generator] Successfully saved and imported generated model file at: {finalPath}", "3D_MODEL_GEN");
 
                 var assistantMsg = new ModelChatMessage {
                     sender = "assistant",
@@ -1487,6 +1596,7 @@ namespace Omnisense
             }
             catch (Exception ex)
             {
+                OmnisenseLogger.LogError($"[3D Model Generator] Failed to write/import generated model file. Path: {finalPath}, Error: {ex.Message}", "3D_MODEL_GEN");
                 AddSystemErrorMessage(_pendingExplanation, $"Failed to save model file: {ex.Message}");
             }
         }
@@ -1775,6 +1885,8 @@ try {
                 string helperDir = Path.Combine(Directory.GetCurrentDirectory(), "UserSettings", "Omnisense_3D_Helpers");
                 string jsHelperPath = Path.Combine(helperDir, "three2gltf.js");
 
+                OmnisenseLogger.Log($"[3D Model Generator] Launching Node process to convert Three.js script to glTF. Helper script: {jsHelperPath}", "3D_MODEL_GEN");
+
                 var processInfo = new System.Diagnostics.ProcessStartInfo
                 {
                     FileName = "node",
@@ -1798,11 +1910,13 @@ try {
                     {
                         if (success)
                         {
+                            OmnisenseLogger.Log($"[3D Model Generator] Three.js to glTF conversion succeeded. Saved output to: {gltfOutputPath}", "3D_MODEL_GEN");
                             onComplete?.Invoke(true, gltfOutputPath);
                         }
                         else
                         {
                             string detail = string.IsNullOrEmpty(error) ? output : error;
+                            OmnisenseLogger.LogError($"[3D Model Generator] Three.js to glTF conversion failed. Exit Code: {process.ExitCode}, Output: {output}, Error: {error}", "3D_MODEL_GEN");
                             onComplete?.Invoke(false, detail);
                         }
                     };
@@ -1812,6 +1926,7 @@ try {
             }
             catch (Exception ex)
             {
+                OmnisenseLogger.LogError($"[3D Model Generator] Exception during Three.js to glTF conversion: {ex.Message}", "3D_MODEL_GEN");
                 onComplete?.Invoke(false, ex.Message);
             }
         }
@@ -1868,6 +1983,60 @@ try {
         {
             EditorPrefs.SetString("Omnisense_SelfHosted_Model", modelName);
             _modelSelector.value = "self-hosted";
+        }
+
+        private void UpdateModelSelectorOptions(string provider)
+        {
+            if (_modelSelector == null) return;
+
+            var container = _modelSelector.parent;
+            if (container != null)
+            {
+                var label = container.Q<Label>();
+                if (label != null)
+                {
+                    if (provider == "Three.js Code Generator") label.text = "LLM Model:";
+                    else if (provider == "Meshy AI") label.text = "Meshy Style:";
+                    else if (provider == "Tripo3D") label.text = "Tripo Version:";
+                }
+            }
+
+            if (provider == "Three.js Code Generator")
+            {
+                _modelSelector.choices = new List<string> {
+                    "gpt-5.5-thinking", "gpt-5.5-pro", "gpt-5.5", "gpt-5.5-instant",
+                    "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano", "o3-mini",
+                    "claude-fable-5", "claude-mythos-5", "claude-opus-4.8", "claude-sonnet-4.6", "claude-haiku-4.5",
+                    "claude-4.7-opus", "claude-4.6-sonnet", "claude-4.5-haiku",
+                    "gemini-3.1-pro", "gemini-3.5-flash", "gemini-3-flash", "gemini-3.1-flash", "gemini-3.1-flash-lite",
+                    "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite",
+                    "grok-4.3", "grok-build-0.1", "grok-latest",
+                    "grok-4.3-beta", "grok-4.20-beta-2", "grok-4.20-fast",
+                    "deepseek-chat", "deepseek-reasoner", "qwen-2.5-coder", "qwen-2.5-instruct", "glm-4", "kimi-k2",
+                    "self-hosted"
+                };
+                string savedModel = EditorPrefs.GetString("Omnisense_ModelGen_LLMModel", "gpt-5.4-mini");
+                if (_modelSelector.choices.Contains(savedModel)) _modelSelector.value = savedModel;
+                else _modelSelector.value = "gpt-5.4-mini";
+            }
+            else if (provider == "Meshy AI")
+            {
+                _modelSelector.choices = new List<string> {
+                    "realistic", "cartoon", "sculpture", "voxel", "poly"
+                };
+                string savedStyle = EditorPrefs.GetString("Omnisense_ModelGen_MeshyStyle", "realistic");
+                if (_modelSelector.choices.Contains(savedStyle)) _modelSelector.value = savedStyle;
+                else _modelSelector.value = "realistic";
+            }
+            else if (provider == "Tripo3D")
+            {
+                _modelSelector.choices = new List<string> {
+                    "v3.1", "v3.0", "v2.5", "v2.0", "v1.0"
+                };
+                string savedVersion = EditorPrefs.GetString("Omnisense_ModelGen_TripoVersion", "v3.1");
+                if (_modelSelector.choices.Contains(savedVersion)) _modelSelector.value = savedVersion;
+                else _modelSelector.value = "v3.1";
+            }
         }
 
         private void ShowModelMenu()

@@ -169,6 +169,7 @@ namespace Omnisense
             var settingsFoldout = new Foldout();
             settingsFoldout.value = false;
             settingsFoldout.text = "⚙ Generation Parameters";
+            settingsFoldout.style.flexShrink = 0;
             settingsFoldout.style.backgroundColor = new StyleColor(new Color(0.14f, 0.15f, 0.17f));
             settingsFoldout.style.paddingLeft = 6;
             settingsFoldout.style.paddingRight = 6;
@@ -297,6 +298,7 @@ namespace Omnisense
             _attachmentContainer.style.borderBottomLeftRadius = 4;
             _attachmentContainer.style.borderBottomRightRadius = 4;
             _attachmentContainer.style.display = DisplayStyle.None;
+            _attachmentContainer.style.flexShrink = 0;
 
             _attachmentThumbnail = new Image { style = { width = 30, height = 30, marginRight = 6 } };
             _attachmentLabel = new Label("attachment.png") { style = { flexGrow = 1, fontSize = 10, color = new StyleColor(new Color(0.8f, 0.8f, 0.8f)) } };
@@ -320,12 +322,14 @@ namespace Omnisense
             _statusLabel.style.color = new StyleColor(new Color(0.6f, 0.6f, 0.6f));
             _statusLabel.style.fontSize = 10;
             _statusLabel.style.marginBottom = 4;
+            _statusLabel.style.flexShrink = 0;
             workspace.Add(_statusLabel);
 
             // Bottom Chat/Prompt Input Row
             var chatInputRow = new VisualElement();
             chatInputRow.style.flexDirection = FlexDirection.Row;
             chatInputRow.style.alignItems = Align.Center;
+            chatInputRow.style.flexShrink = 0;
 
             _attachBtn = new Button(OnAttachClicked) { text = "📎" };
             _attachBtn.style.height = 35;
@@ -777,6 +781,8 @@ namespace Omnisense
         private void OnSendClicked()
         {
             string promptText = _promptField.value.Trim();
+            OmnisenseLogger.Log($"[Image Generator] Send button clicked. Prompt: \"{promptText}\", reference art: \"{_selectedReferencePath}\"", "IMAGE_GEN");
+
             if (string.IsNullOrEmpty(promptText) && string.IsNullOrEmpty(_selectedReferencePath))
             {
                 return;
@@ -829,6 +835,7 @@ namespace Omnisense
 
             SetLoadingState(true);
             ShowStatus("Thinking & refining prompt details (30-45 seconds)...");
+            OmnisenseLogger.Log($"[Image Generator] Starting LLM orchestration request using model '{model}'. User prompt: \"{userPrompt}\"", "IMAGE_GEN");
 
             ILLMProvider providerImpl = LLMProviderFactory.GetProvider(model);
             if (providerImpl == null)
@@ -891,11 +898,14 @@ namespace Omnisense
                     string model = _llmModelField.value;
                     ILLMProvider providerImpl = LLMProviderFactory.GetProvider(model);
                     string parsedContent = providerImpl.ParseResponseContent(rawResponse);
+                    OmnisenseLogger.Log($"[Image Generator] LLM orchestration request succeeded. Response content: {parsedContent}", "IMAGE_GEN");
 
                     ProcessOrchestratorReply(parsedContent);
                 }
                 else
                 {
+                    string err = _activeRequest.downloadHandler?.text ?? _activeRequest.error;
+                    OmnisenseLogger.LogError($"[Image Generator] LLM orchestration request failed. Error: {_activeRequest.error}, Details: {err}", "IMAGE_GEN");
                     ShowError($"LLM Request Failed: {_activeRequest.error}");
                 }
                 _activeRequest.Dispose();
@@ -908,6 +918,7 @@ namespace Omnisense
                 _activeRequest.Dispose();
                 _activeRequest = null;
                 SetLoadingState(false);
+                OmnisenseLogger.LogError($"[Image Generator] LLM orchestration request timed out after {elapsed:F0} seconds.", "IMAGE_GEN");
                 ShowError($"LLM Request timed out after {elapsed:F0} seconds.");
             }
         }
@@ -1039,6 +1050,8 @@ namespace Omnisense
                 $"\"size\":\"{width}x{height}\"" +
                 "}";
 
+            OmnisenseLogger.Log($"[Image Generator] Sending OpenAI Image Request. URL: {url}\nPayload: {body}", "IMAGE_GEN");
+
             var req = new UnityWebRequest(url, "POST");
             req.timeout = 180;
             byte[] bodyRaw = System.Text.Encoding.UTF8.GetBytes(body);
@@ -1065,6 +1078,8 @@ namespace Omnisense
                 $"\"aspectRatio\":\"{aspect}\"," +
                 $"\"personGeneration\":\"ALLOW_ADULT\"" +
                 "}";
+
+            OmnisenseLogger.Log($"[Image Generator] Sending Google Imagen Image Request. URL: {url}\nPayload: {body}", "IMAGE_GEN");
 
             var req = new UnityWebRequest(url, "POST");
             req.timeout = 180;
@@ -1096,12 +1111,15 @@ namespace Omnisense
 
                 if (_activeGenRequest.result == UnityWebRequest.Result.Success)
                 {
+                    string text = _activeGenRequest.downloadHandler.text;
+                    OmnisenseLogger.Log($"[Image Generator] Image API response succeeded. Response: {text}", "IMAGE_GEN");
                     ProcessFinishedGenRequest(_activeGenRequest);
                 }
                 else
                 {
                     string errDetail = "";
                     try { errDetail = _activeGenRequest.downloadHandler?.text ?? ""; } catch { }
+                    OmnisenseLogger.LogError($"[Image Generator] Image API request failed. Status: {_activeGenRequest.responseCode}, Error: {_activeGenRequest.error}, Details: {errDetail}", "IMAGE_GEN");
                     AddSystemErrorMessage(_pendingExplanation, $"API Generation Failed: {_activeGenRequest.error}\nDetails: {errDetail}");
                 }
                 _activeGenRequest.Dispose();
@@ -1114,6 +1132,7 @@ namespace Omnisense
                 _activeGenRequest.Dispose();
                 _activeGenRequest = null;
                 SetLoadingState(false);
+                OmnisenseLogger.LogError($"[Image Generator] Image request timed out after {elapsed:F0} seconds.", "IMAGE_GEN");
                 AddSystemErrorMessage(_pendingExplanation, $"Generation timed out after {elapsed:F0} seconds.");
             }
         }
@@ -1180,6 +1199,7 @@ namespace Omnisense
         private void DownloadGenImageBytes(string url)
         {
             SetLoadingState(true);
+            OmnisenseLogger.Log($"[Image Generator] Downloading generated image payload from URL: {url}", "IMAGE_GEN");
             var req = UnityWebRequest.Get(url);
             req.timeout = 180;
             double startTime = EditorApplication.timeSinceStartup;
@@ -1192,10 +1212,12 @@ namespace Omnisense
                     if (req.result == UnityWebRequest.Result.Success)
                     {
                         byte[] bytes = req.downloadHandler.data;
+                        OmnisenseLogger.Log($"[Image Generator] Downloaded image payload successfully. Size: {bytes.Length} bytes.", "IMAGE_GEN");
                         SaveAndImportGenImage(bytes);
                     }
                     else
                     {
+                        OmnisenseLogger.LogError($"[Image Generator] Failed to download image payload. Error: {req.error}, Status Code: {req.responseCode}", "IMAGE_GEN");
                         AddSystemErrorMessage(_pendingExplanation, $"Failed to download image payload: {req.error}");
                     }
                     req.Dispose();
@@ -1207,6 +1229,7 @@ namespace Omnisense
                     req.Dispose();
                     req = null;
                     SetLoadingState(false);
+                    OmnisenseLogger.LogError($"[Image Generator] Image payload download timed out.", "IMAGE_GEN");
                     AddSystemErrorMessage(_pendingExplanation, "Download timed out.");
                 }
             };
@@ -1266,6 +1289,7 @@ namespace Omnisense
                 File.WriteAllBytes(absoluteFilePath, imageBytes);
                 AssetDatabase.ImportAsset(finalPath);
                 AssetDatabase.Refresh();
+                OmnisenseLogger.Log($"[Image Generator] Successfully saved and imported generated image file at: {finalPath}", "IMAGE_GEN");
 
                 _lastGeneratedPath = finalPath;
 
@@ -1283,6 +1307,7 @@ namespace Omnisense
             }
             catch (Exception ex)
             {
+                OmnisenseLogger.LogError($"[Image Generator] Failed to write/import generated image file. Path: {finalPath}, Error: {ex.Message}", "IMAGE_GEN");
                 AddSystemErrorMessage(_pendingExplanation, $"Failed to write image to file or import asset: {ex.Message}");
             }
         }
