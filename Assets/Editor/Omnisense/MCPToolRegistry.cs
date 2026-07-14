@@ -1301,6 +1301,18 @@ namespace Omnisense
                     {
                         subResult = CreateUIPanel(op.parentPath ?? op.parent ?? op.path, op.name);
                     }
+                    else if (actionName == "ui/create_uxml" || actionName == "create_uxml")
+                    {
+                        subResult = CreateUXML(op.path, op.content ?? op.value);
+                    }
+                    else if (actionName == "ui/create_uss" || actionName == "create_uss")
+                    {
+                        subResult = CreateUSS(op.path, op.content ?? op.value);
+                    }
+                    else if (actionName == "ui/bind_ui_document" || actionName == "bind_ui_document")
+                    {
+                        subResult = BindUIDocument(op.path, op.name ?? op.value, op.parentPath ?? op.parent);
+                    }
                     else if (actionName == "ui/create_text" || actionName == "create_text")
                     {
                         subResult = CreateUIText(
@@ -1712,6 +1724,129 @@ namespace Omnisense
             }
         }
 
+        public static ToolResult CreateUXML(string path, string content)
+        {
+            Debug.Log($"[Omnisense] Tool: CreateUXML(path='{path}')");
+            try
+            {
+                if (string.IsNullOrEmpty(path))
+                    return new ToolResult { success = false, error = "Path is required." };
+                if (string.IsNullOrEmpty(content))
+                    return new ToolResult { success = false, error = "Content is required." };
+
+                if (!path.EndsWith(".uxml", StringComparison.OrdinalIgnoreCase))
+                    return new ToolResult { success = false, error = "File path must end with .uxml extension." };
+
+                string fullPath = Path.Combine(Application.dataPath, "..", path);
+                string dir = Path.GetDirectoryName(fullPath);
+                if (!Directory.Exists(dir))
+                {
+                    Directory.CreateDirectory(dir);
+                }
+
+                // If content does not start with standard XML declaration, wrap it
+                if (!content.Contains("<ui:UXML"))
+                {
+                    content = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n" +
+                              "<ui:UXML xmlns:ui=\"UnityEngine.UIElements\" xmlns:uie=\"UnityEditor.UIElements\" " +
+                              "xsi=\"http://www.w3.org/2001/XMLSchema-instance\" " +
+                              "engine=\"UnityEngine.UIElements\" editor=\"UnityEditor.UIElements\" " +
+                              "noNamespaceSchemaLocation=\"../../UIElementsSchema/UIElements.xsd\">\n" +
+                              content + "\n" +
+                              "</ui:UXML>";
+                }
+
+                File.WriteAllText(fullPath, content);
+                AssetDatabase.ImportAsset(path);
+                AssetDatabase.Refresh();
+
+                return new ToolResult { success = true, observation = $"Successfully created UXML file at path: {path}" };
+            }
+            catch (Exception e)
+            {
+                return new ToolResult { success = false, error = e.Message };
+            }
+        }
+
+        public static ToolResult CreateUSS(string path, string content)
+        {
+            Debug.Log($"[Omnisense] Tool: CreateUSS(path='{path}')");
+            try
+            {
+                if (string.IsNullOrEmpty(path))
+                    return new ToolResult { success = false, error = "Path is required." };
+                if (string.IsNullOrEmpty(content))
+                    return new ToolResult { success = false, error = "Content is required." };
+
+                if (!path.EndsWith(".uss", StringComparison.OrdinalIgnoreCase))
+                    return new ToolResult { success = false, error = "File path must end with .uss extension." };
+
+                string fullPath = Path.Combine(Application.dataPath, "..", path);
+                string dir = Path.GetDirectoryName(fullPath);
+                if (!Directory.Exists(dir))
+                {
+                    Directory.CreateDirectory(dir);
+                }
+
+                File.WriteAllText(fullPath, content);
+                AssetDatabase.ImportAsset(path);
+                AssetDatabase.Refresh();
+
+                return new ToolResult { success = true, observation = $"Successfully created USS style file at path: {path}" };
+            }
+            catch (Exception e)
+            {
+                return new ToolResult { success = false, error = e.Message };
+            }
+        }
+
+        public static ToolResult BindUIDocument(string path, string name, string parentPath = null)
+        {
+            Debug.Log($"[Omnisense] Tool: BindUIDocument(uxmlPath='{path}', name='{name}', parent='{parentPath}')");
+            try
+            {
+                if (string.IsNullOrEmpty(path))
+                    return new ToolResult { success = false, error = "UXML Path is required." };
+                if (string.IsNullOrEmpty(name))
+                    name = "UIDocument_Object";
+
+                var uxmlAsset = AssetDatabase.LoadAssetAtPath<UnityEngine.UIElements.VisualTreeAsset>(path);
+                if (uxmlAsset == null)
+                {
+                    return new ToolResult { success = false, error = $"UXML VisualTreeAsset not found at path: {path}" };
+                }
+
+                GameObject parentGo = null;
+                if (!string.IsNullOrEmpty(parentPath))
+                {
+                    parentGo = FindGameObjectDeep(parentPath);
+                    if (parentGo == null)
+                    {
+                        return new ToolResult { success = false, error = $"Parent GameObject not found at path: {parentPath}" };
+                    }
+                }
+
+                GameObject go = new GameObject(name);
+                go.layer = 5; // UI layer
+                if (parentGo != null)
+                {
+                    go.transform.SetParent(parentGo.transform, false);
+                }
+
+                var uiDoc = go.AddComponent<UnityEngine.UIElements.UIDocument>();
+                uiDoc.visualTreeAsset = uxmlAsset;
+
+                Undo.RegisterCreatedObjectUndo(go, "Bind UI Document");
+                Selection.activeGameObject = go;
+
+                return new ToolResult { success = true, observation = $"Successfully instantiated UIDocument GameObject '{name}' and bound UXML asset from path '{path}'." };
+            }
+            catch (Exception e)
+            {
+                return new ToolResult { success = false, error = e.Message };
+            }
+        }
+
         public static ToolResult CaptureUIScreenshot(string destinationAssetPath = "Assets/Editor/Omnisense/UI_Dump.png")
         {
             Debug.Log($"[Omnisense] Tool: CaptureUIScreenshot(destination='{destinationAssetPath}')");
@@ -1997,7 +2132,7 @@ namespace Omnisense
         public string paddingCSV;
         public string childAlignment;
         public string destinationAssetPath;
-
+        public string content;
         public List<string> components;
     }
 }

@@ -128,6 +128,12 @@ namespace Omnisense
                     return MCPToolRegistry.InspectComponent(p.path, p.component);
                 case "ui/setup_canvas":
                     return MCPToolRegistry.SetupCanvas();
+                case "ui/create_uxml":
+                    return MCPToolRegistry.CreateUXML(p.path, p.content);
+                case "ui/create_uss":
+                    return MCPToolRegistry.CreateUSS(p.path, p.content);
+                case "ui/bind_ui_document":
+                    return MCPToolRegistry.BindUIDocument(p.path, p.name, p.parentPath);
                 case "ui/create_panel":
                     return MCPToolRegistry.CreateUIPanel(p.parentPath, p.name);
                 case "scene/capture_ui_screenshot":
@@ -273,6 +279,9 @@ namespace Omnisense
                 case "scene/capture_ui_screenshot":
                 case "scene/add_script_component":
                 case "ui/setup_canvas":
+                case "ui/create_uxml":
+                case "ui/create_uss":
+                case "ui/bind_ui_document":
                 case "ui/create_panel":
                 case "ui/create_text":
                 case "ui/create_button":
@@ -297,6 +306,12 @@ namespace Omnisense
             {
                 case "ui/setup_canvas":
                     return "<color=#00FF00>+ Setup Canvas:</color> Create high-performance UI Canvas & EventSystem";
+                case "ui/create_uxml":
+                    return $"<color=#00FF00>+ Create UXML Layout:</color> Create UI Toolkit UXML file at '{p.path}'";
+                case "ui/create_uss":
+                    return $"<color=#00FF00>+ Create USS Style:</color> Create UI Toolkit USS stylesheet file at '{p.path}'";
+                case "ui/bind_ui_document":
+                    return $"<color=#00FF00>+ Bind UI Document:</color> Bind UXML '{p.path}' to UIDocument GameObject '{p.name}'" + (string.IsNullOrEmpty(p.parentPath) ? "" : $" under parent '{p.parentPath}'");
                 case "ui/create_panel":
                     return $"<color=#00FF00>+ Create Panel:</color> Create '{p.name}' under parent '{p.parentPath}'";
                 case "ui/create_text":
@@ -346,6 +361,12 @@ namespace Omnisense
                             list.Add($"  + Add Child '{op.name}' to '{op.parent ?? op.path}' with components [{(op.components != null ? string.Join(", ", op.components) : op.component)}]");
                         else if (act == "add_script_component" || act == "scene/add_script_component")
                             list.Add($"  + Attach Script: '{op.scriptName ?? op.name ?? op.component}' on '{op.path}'");
+                        else if (act == "ui/create_uxml" || act == "create_uxml")
+                            list.Add($"  + Create UXML file: '{op.path}'");
+                        else if (act == "ui/create_uss" || act == "create_uss")
+                            list.Add($"  + Create USS style file: '{op.path}'");
+                        else if (act == "ui/bind_ui_document" || act == "bind_ui_document")
+                            list.Add($"  + Bind UI Document: '{op.path}' to GameObject '{op.name ?? op.value}'");
                         else
                             list.Add($"  ? Unknown op: '{act}' on '{op.path}'");
                     }
@@ -369,6 +390,9 @@ namespace Omnisense
             switch (method)
             {
                 case "ui/setup_canvas": return "Configured Canvas and EventSystem in scene";
+                case "ui/create_uxml": return $"Created UXML Layout file: '{p.path}'";
+                case "ui/create_uss": return $"Created USS Style file: '{p.path}'";
+                case "ui/bind_ui_document": return $"Bound UXML '{p.path}' to UIDocument GameObject '{p.name}'";
                 case "ui/create_panel": return $"Created UI Panel: '{p.name}' under parent '{p.parentPath}'";
                 case "ui/create_text": return $"Created UI Text: '{p.name}' with text '{p.textContent}'";
                 case "ui/create_button": return $"Created UI Button: '{p.name}' with label '{p.labelText}'";
