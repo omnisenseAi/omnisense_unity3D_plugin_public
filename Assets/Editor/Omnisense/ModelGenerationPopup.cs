@@ -48,10 +48,13 @@ namespace Omnisense
         private Image _attachmentThumbnail;
         private Label _attachmentLabel;
         private string _selectedReferencePath = "";
+        private string _lastAttachedPath = "";
 
         // Settings and converter controls
         private DropdownField _providerField;
         private DropdownField _modelSelector;
+        private DropdownField _tripoVersionSelector;
+        private VisualElement _tripoVersionRow;
         private TextField _pathField;
         private TextField _jsFileField;
         private Button _convertBtn;
@@ -230,6 +233,7 @@ namespace Omnisense
                 else if (currentProvider == "Tripo3D")
                 {
                     EditorPrefs.SetString("Omnisense_ModelGen_TripoVersion", evt.newValue);
+                    UpdateTripoVersionSelector(evt.newValue);
                 }
             });
 
@@ -253,11 +257,29 @@ namespace Omnisense
             modelContainer.Add(_modelSelector);
             dropdownsRow.Add(modelContainer);
 
+            // Create Tripo model version row
+            _tripoVersionRow = new VisualElement();
+            _tripoVersionRow.style.flexDirection = FlexDirection.Row;
+            _tripoVersionRow.style.justifyContent = Justify.SpaceBetween;
+            _tripoVersionRow.style.marginBottom = 6;
+            _tripoVersionRow.style.display = DisplayStyle.None; // Hidden by default
+
+            var tripoVersionContainer = new VisualElement { style = { width = Length.Percent(100) } };
+            tripoVersionContainer.Add(new Label("Tripo Model Version:") { style = { unityFontStyleAndWeight = FontStyle.Bold, color = new StyleColor(new Color(0.8f, 0.8f, 0.8f)), fontSize = 10 } });
+            _tripoVersionSelector = new DropdownField();
+            _tripoVersionSelector.RegisterValueChangedCallback(evt => {
+                if (evt.newValue == null) return;
+                EditorPrefs.SetString("Omnisense_ModelGen_TripoSpecificVersion", evt.newValue);
+            });
+            tripoVersionContainer.Add(_tripoVersionSelector);
+            _tripoVersionRow.Add(tripoVersionContainer);
+
             string savedProvider = EditorPrefs.GetString("Omnisense_ModelGen_Provider", "Three.js Code Generator");
             _providerField.value = savedProvider;
             UpdateModelSelectorOptions(savedProvider);
 
             settingsContent.Add(dropdownsRow);
+            settingsContent.Add(_tripoVersionRow);
 
             _orchestratorToggle = new Toggle("Use LLM Prompt Orchestration") { value = EditorPrefs.GetBool("Omnisense_ModelGen_UseOrchestrator", true) };
             _orchestratorToggle.style.unityFontStyleAndWeight = FontStyle.Bold;
@@ -900,6 +922,7 @@ namespace Omnisense
 
             _promptField.value = "";
             string attachedPath = _selectedReferencePath;
+            _lastAttachedPath = attachedPath;
             RemoveAttachment();
 
             PopulateSessionsList();
@@ -910,7 +933,7 @@ namespace Omnisense
 
             if (!useOrchestrator)
             {
-                if (!string.IsNullOrEmpty(attachedPath))
+                if (!string.IsNullOrEmpty(attachedPath) && providerMode != "Tripo3D")
                 {
                     OmnisenseLogger.LogWarning("[3D Model Generator] Reference image attached but Orchestrator is disabled. Reference image content will not be processed.", "3D_MODEL_GEN");
                 }
@@ -1251,37 +1274,217 @@ namespace Omnisense
                 }
 
                 SetLoadingState(true);
-                ShowStatus("Contacting Tripo3D to queue model generation...");
 
-                string tripoVersion = _modelSelector.value;
-                string actualVersion = "v3.1-20260211";
-                if (tripoVersion == "v3.1") actualVersion = "v3.1-20260211";
-                else if (tripoVersion == "v3.0") actualVersion = "v3.0-20250812";
-                else if (tripoVersion == "v2.5") actualVersion = "v2.5-20250123";
-                else if (tripoVersion == "v2.0") actualVersion = "v2.0-20240919";
-                else if (tripoVersion == "v1.0") actualVersion = "v1.0-20240417";
+                string tripoMode = _modelSelector.value;
+                bool needsImage = tripoMode == "Standard Image to Model" ||
+                                  tripoMode == "P Image to Model" ||
+                                  tripoMode == "Standard Multiview to Model" ||
+                                  tripoMode == "P Multiview to Model" ||
+                                  tripoMode == "Image to Gaussian Splat";
 
-                string url = "https://openapi.tripo3d.ai/v3/generation/text-to-model";
-                string body = "{" +
-                    $"\"prompt\":\"{JsonEscape(cleanPrompt)}\"," +
+                if (needsImage && string.IsNullOrEmpty(_lastAttachedPath))
+                {
+                    SetLoadingState(false);
+                    ShowStatus("Ready to design 3D models...");
+                    AddSystemErrorMessage(explanation, "This mode requires an attached reference image. Please drag & drop or click the paperclip to attach one.");
+                    return;
+                }
+
+                if (needsImage)
+                {
+                    UploadImageToTripo(_lastAttachedPath, apiKey, (fileToken) => {
+                        SubmitTripoGenerationTask(apiKey, tripoMode, fileToken, cleanPrompt);
+                    });
+                }
+                else
+                {
+                    SubmitTripoGenerationTask(apiKey, tripoMode, null, cleanPrompt);
+                }
+            }
+        }
+
+        private void UploadImageToTripo(string localImagePath, string apiKey, Action<string> onUploadComplete)
+        {
+            ShowStatus("Requesting upload ticket from Tripo3D...");
+            string format = Path.GetExtension(localImagePath).TrimStart('.').ToLower();
+            if (string.IsNullOrEmpty(format)) format = "png";
+
+            string presignUrl = "https://openapi.tripo3d.ai/v3/files/presign";
+            string body = "{\"format\":\"" + format + "\"}";
+
+            var req = new UnityWebRequest(presignUrl, "POST");
+            byte[] bodyRaw = System.Text.Encoding.UTF8.GetBytes(body);
+            req.uploadHandler = new UploadHandlerRaw(bodyRaw);
+            req.downloadHandler = new DownloadHandlerBuffer();
+            req.SetRequestHeader("Content-Type", "application/json");
+            req.SetRequestHeader("Authorization", "Bearer " + apiKey);
+
+            req.SendWebRequest().completed += (op) =>
+            {
+                if (req.result != UnityWebRequest.Result.Success)
+                {
+                    string err = req.downloadHandler?.text ?? req.error;
+                    OmnisenseLogger.LogError($"[3D Model Generator] Tripo3D Presign request failed: {err}", "3D_MODEL_GEN");
+                    SetLoadingState(false);
+                    AddSystemErrorMessage(_pendingExplanation, $"Tripo3D upload ticket request failed: {err}");
+                    req.Dispose();
+                    return;
+                }
+
+                string json = req.downloadHandler.text;
+                req.Dispose();
+
+                string presignedUrl = "";
+                string fileToken = "";
+
+                var urlMatch = Regex.Match(json, @"""presigned_url""\s*:\s*""([^""]+)""");
+                if (urlMatch.Success) presignedUrl = urlMatch.Groups[1].Value.Replace("\\/", "/");
+
+                var tokenMatch = Regex.Match(json, @"""file_token""\s*:\s*""([^""]+)""");
+                if (tokenMatch.Success) fileToken = tokenMatch.Groups[1].Value;
+
+                if (string.IsNullOrEmpty(presignedUrl) || string.IsNullOrEmpty(fileToken))
+                {
+                    OmnisenseLogger.LogError($"[3D Model Generator] Failed to parse presigned_url or file_token from: {json}", "3D_MODEL_GEN");
+                    SetLoadingState(false);
+                    AddSystemErrorMessage(_pendingExplanation, "Failed to parse upload ticket from Tripo3D.");
+                    return;
+                }
+
+                UploadBytesToPresignedUrl(localImagePath, presignedUrl, fileToken, onUploadComplete);
+            };
+        }
+
+        private void UploadBytesToPresignedUrl(string localImagePath, string presignedUrl, string fileToken, Action<string> onUploadComplete)
+        {
+            ShowStatus("Uploading reference image to Tripo3D...");
+            string absolutePath = localImagePath;
+            if (localImagePath.StartsWith("Assets"))
+            {
+                absolutePath = Path.Combine(Application.dataPath, "..", localImagePath);
+            }
+
+            if (!File.Exists(absolutePath))
+            {
+                SetLoadingState(false);
+                AddSystemErrorMessage(_pendingExplanation, $"Reference image not found at: {localImagePath}");
+                return;
+            }
+
+            byte[] bytes = File.ReadAllBytes(absolutePath);
+            var req = new UnityWebRequest(presignedUrl, "PUT");
+            req.uploadHandler = new UploadHandlerRaw(bytes);
+            req.downloadHandler = new DownloadHandlerBuffer();
+
+            req.SendWebRequest().completed += (op) =>
+            {
+                if (req.result != UnityWebRequest.Result.Success)
+                {
+                    string err = req.downloadHandler?.text ?? req.error;
+                    OmnisenseLogger.LogError($"[3D Model Generator] Tripo3D image upload PUT failed: {err}", "3D_MODEL_GEN");
+                    SetLoadingState(false);
+                    AddSystemErrorMessage(_pendingExplanation, $"Tripo3D image upload failed: {err}");
+                    req.Dispose();
+                    return;
+                }
+
+                req.Dispose();
+                OmnisenseLogger.Log($"[3D Model Generator] Successfully uploaded image to Tripo3D. File Token: {fileToken}", "3D_MODEL_GEN");
+                onUploadComplete?.Invoke(fileToken);
+            };
+        }
+
+        private void SubmitTripoGenerationTask(string apiKey, string tripoMode, string fileToken, string prompt)
+        {
+            string url = "https://openapi.tripo3d.ai/v3/generation/text-to-model";
+            string body = "";
+
+            string specificVersion = _tripoVersionSelector != null ? _tripoVersionSelector.value : "v3.1";
+            string actualVersion = GetMappedTripoVersion(specificVersion);
+
+            if (tripoMode == "Standard Text to Model")
+            {
+                url = "https://openapi.tripo3d.ai/v3/generation/text-to-model";
+                body = "{" +
+                    $"\"prompt\":\"{JsonEscape(prompt)}\"," +
                     $"\"model\":\"{actualVersion}\"" +
                     "}";
-
-                OmnisenseLogger.Log($"[3D Model Generator] Triggering Tripo3D task (v3 API, mapped version: {actualVersion}). URL: {url}\nPayload: {body}", "3D_MODEL_GEN");
-
-                var req = new UnityWebRequest(url, "POST");
-                req.timeout = 60;
-                byte[] bodyRaw = System.Text.Encoding.UTF8.GetBytes(body);
-                req.uploadHandler = new UploadHandlerRaw(bodyRaw);
-                req.downloadHandler = new DownloadHandlerBuffer();
-                req.SetRequestHeader("Content-Type", "application/json");
-                req.SetRequestHeader("Authorization", "Bearer " + apiKey);
-
-                _activeCloudRequest = req;
-                _cloudRequestStartTime = EditorApplication.timeSinceStartup;
-                EditorApplication.update += CheckTripoRequestProgress;
-                _activeCloudRequest.SendWebRequest();
             }
+            else if (tripoMode == "P Text to Model")
+            {
+                url = "https://openapi.tripo3d.ai/v3/generation/text-to-model";
+                body = "{" +
+                    $"\"prompt\":\"{JsonEscape(prompt)}\"," +
+                    $"\"model\":\"{actualVersion}\"" +
+                    "}";
+            }
+            else if (tripoMode == "Standard Image to Model")
+            {
+                url = "https://openapi.tripo3d.ai/v3/generation/image-to-model";
+                body = "{" +
+                    $"\"input\":\"{fileToken}\"," +
+                    $"\"model\":\"{actualVersion}\"" +
+                    "}";
+            }
+            else if (tripoMode == "P Image to Model")
+            {
+                url = "https://openapi.tripo3d.ai/v3/generation/image-to-model";
+                body = "{" +
+                    $"\"input\":\"{fileToken}\"," +
+                    $"\"model\":\"{actualVersion}\"" +
+                    "}";
+            }
+            else if (tripoMode == "Standard Multiview to Model")
+            {
+                url = "https://openapi.tripo3d.ai/v3/generation/multiview-to-model";
+                body = "{" +
+                    "\"inputs\":[" +
+                    "{\"front\":\"" + fileToken + "\"}" +
+                    "]," +
+                    $"\"model\":\"{actualVersion}\"" +
+                    "}";
+            }
+            else if (tripoMode == "P Multiview to Model")
+            {
+                url = "https://openapi.tripo3d.ai/v3/generation/multiview-to-model";
+                body = "{" +
+                    "\"inputs\":[" +
+                    "{\"front\":\"" + fileToken + "\"}" +
+                    "]," +
+                    $"\"model\":\"{actualVersion}\"" +
+                    "}";
+            }
+            else if (tripoMode == "Image to Gaussian Splat")
+            {
+                url = "https://openapi.tripo3d.ai/v3/generation/image-to-splat";
+                body = "{" +
+                    $"\"input\":\"{fileToken}\"" +
+                    "}";
+            }
+            else
+            {
+                url = "https://openapi.tripo3d.ai/v3/generation/text-to-model";
+                body = "{" +
+                    $"\"prompt\":\"{JsonEscape(prompt)}\"," +
+                    "\"model\":\"v3.1-20260211\"" +
+                    "}";
+            }
+
+            ShowStatus("Contacting Tripo3D to queue generation task...");
+            OmnisenseLogger.Log($"[3D Model Generator] Submitting task to Tripo3D. Mode: {tripoMode}, URL: {url}\nPayload: {body}", "3D_MODEL_GEN");
+
+            var req = new UnityWebRequest(url, "POST");
+            req.timeout = 60;
+            byte[] bodyRaw = System.Text.Encoding.UTF8.GetBytes(body);
+            req.uploadHandler = new UploadHandlerRaw(bodyRaw);
+            req.downloadHandler = new DownloadHandlerBuffer();
+            req.SetRequestHeader("Content-Type", "application/json");
+            req.SetRequestHeader("Authorization", "Bearer " + apiKey);
+
+            _activeCloudRequest = req;
+            _cloudRequestStartTime = EditorApplication.timeSinceStartup;
+            EditorApplication.update += CheckTripoRequestProgress;
+            _activeCloudRequest.SendWebRequest();
         }
 
         private void CheckThreeJsRequestProgress()
@@ -1508,15 +1711,23 @@ namespace Omnisense
                                 var modelMatch = Regex.Match(json, @"""model_url""\s*:\s*""([^""]+)""");
                                 if (modelMatch.Success)
                                 {
-                                    string glbUrl = modelMatch.Groups[1].Value.Replace("\\/", "/");
-                                    OmnisenseLogger.Log($"[3D Model Generator] Tripo3D task completed. GLB URL: {glbUrl}", "3D_MODEL_GEN");
-                                    DownloadModelBytes(glbUrl, "glb");
+                                    string modelUrl = modelMatch.Groups[1].Value.Replace("\\/", "/");
+                                    string pathOnly = modelUrl;
+                                    int qMark = modelUrl.IndexOf('?');
+                                    if (qMark != -1) pathOnly = modelUrl.Substring(0, qMark);
+
+                                    string fmt = "glb";
+                                    if (pathOnly.EndsWith(".splat", StringComparison.OrdinalIgnoreCase)) fmt = "splat";
+                                    else if (pathOnly.EndsWith(".ply", StringComparison.OrdinalIgnoreCase)) fmt = "ply";
+
+                                    OmnisenseLogger.Log($"[3D Model Generator] Tripo3D task completed. URL: {modelUrl}, Format: {fmt}", "3D_MODEL_GEN");
+                                    DownloadModelBytes(modelUrl, fmt);
                                 }
                                 else
                                 {
-                                    OmnisenseLogger.LogError($"[3D Model Generator] Completed Tripo3D response is missing model_url GLB link: {json}", "3D_MODEL_GEN");
+                                    OmnisenseLogger.LogError($"[3D Model Generator] Completed Tripo3D response is missing model_url link: {json}", "3D_MODEL_GEN");
                                     SetLoadingState(false);
-                                    AddSystemErrorMessage(_pendingExplanation, "Failed to find GLB file model_url in completed task response.");
+                                    AddSystemErrorMessage(_pendingExplanation, "Failed to find model_url in completed task response.");
                                 }
                             }
                             else if (status == "failed")
@@ -1568,7 +1779,7 @@ namespace Omnisense
             string targetDir = rawPath;
             string finalPath = rawPath;
 
-            if (rawPath.EndsWith(".glb") || rawPath.EndsWith(".gltf"))
+            if (rawPath.EndsWith(".glb") || rawPath.EndsWith(".gltf") || rawPath.EndsWith(".splat") || rawPath.EndsWith(".ply"))
             {
                 targetDir = Path.GetDirectoryName(rawPath);
             }
@@ -2028,7 +2239,7 @@ try {
                 {
                     if (provider == "Three.js Code Generator") label.text = "LLM Model:";
                     else if (provider == "Meshy AI") label.text = "Meshy Style:";
-                    else if (provider == "Tripo3D") label.text = "Tripo Version:";
+                    else if (provider == "Tripo3D") label.text = "Tripo Mode:";
                 }
             }
 
@@ -2062,12 +2273,63 @@ try {
             else if (provider == "Tripo3D")
             {
                 _modelSelector.choices = new List<string> {
-                    "v3.1", "v3.0", "v2.5", "v2.0", "v1.0"
+                    "Standard Text to Model",
+                    "P Text to Model",
+                    "Standard Image to Model",
+                    "P Image to Model",
+                    "Standard Multiview to Model",
+                    "P Multiview to Model",
+                    "Image to Gaussian Splat"
                 };
-                string savedVersion = EditorPrefs.GetString("Omnisense_ModelGen_TripoVersion", "v3.1");
+                string savedVersion = EditorPrefs.GetString("Omnisense_ModelGen_TripoVersion", "Standard Text to Model");
                 if (_modelSelector.choices.Contains(savedVersion)) _modelSelector.value = savedVersion;
-                else _modelSelector.value = "v3.1";
+                else _modelSelector.value = "Standard Text to Model";
             }
+
+            UpdateTripoVersionSelector(_modelSelector.value);
+        }
+
+        private void UpdateTripoVersionSelector(string tripoMode)
+        {
+            if (_tripoVersionRow == null || _tripoVersionSelector == null) return;
+
+            if (_providerField.value != "Tripo3D")
+            {
+                _tripoVersionRow.style.display = DisplayStyle.None;
+                return;
+            }
+
+            if (tripoMode == "Image to Gaussian Splat")
+            {
+                _tripoVersionRow.style.display = DisplayStyle.None;
+                return;
+            }
+
+            _tripoVersionRow.style.display = DisplayStyle.Flex;
+
+            if (tripoMode == "Standard Text to Model" || tripoMode == "Standard Image to Model" || tripoMode == "Standard Multiview to Model")
+            {
+                _tripoVersionSelector.choices = new List<string> { "v3.1", "v3.0", "v2.5", "v2.0", "v1.0" };
+                string savedSpecific = EditorPrefs.GetString("Omnisense_ModelGen_TripoSpecificVersion", "v3.1");
+                if (_tripoVersionSelector.choices.Contains(savedSpecific)) _tripoVersionSelector.value = savedSpecific;
+                else _tripoVersionSelector.value = "v3.1";
+            }
+            else if (tripoMode == "P Text to Model" || tripoMode == "P Image to Model" || tripoMode == "P Multiview to Model")
+            {
+                _tripoVersionSelector.choices = new List<string> { "P1" };
+                _tripoVersionSelector.value = "P1";
+            }
+        }
+
+        private string GetMappedTripoVersion(string selectedVersion)
+        {
+            if (selectedVersion == "v3.1") return "v3.1-20260211";
+            if (selectedVersion == "v3.0") return "v3.0-20250812";
+            if (selectedVersion == "v2.5") return "v2.5-20250123";
+            if (selectedVersion == "v2.0") return "v2.0-20240919";
+            if (selectedVersion == "v1.0") return "v1.0-20240417";
+            if (selectedVersion == "P1") return "P1-20260311";
+            return "v3.1-20260211";
         }
 
         private void ShowModelMenu()
