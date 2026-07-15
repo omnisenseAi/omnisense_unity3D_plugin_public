@@ -166,7 +166,7 @@ namespace Omnisense
 
             // Settings drawer (Foldout)
             var settingsFoldout = new Foldout();
-            settingsFoldout.value = false;
+            settingsFoldout.value = true;
             settingsFoldout.text = "⚙ Generation Parameters";
             settingsFoldout.style.flexShrink = 0;
             settingsFoldout.style.backgroundColor = new StyleColor(new Color(0.14f, 0.15f, 0.17f));

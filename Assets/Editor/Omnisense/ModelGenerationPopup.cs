@@ -178,7 +178,7 @@ namespace Omnisense
 
             // Settings Foldout (Drawer)
             var settingsFoldout = new Foldout();
-            settingsFoldout.value = false;
+            settingsFoldout.value = true;
             settingsFoldout.text = "⚙ Generation Parameters";
             settingsFoldout.style.flexShrink = 0;
 
