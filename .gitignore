@@ -70,3 +70,6 @@ crashlytics-build.properties
 .Trashes
 ehthumbs.db
 Thumbs.db
+
+# OmniSense context memory database
+.omnisense_dna.md
