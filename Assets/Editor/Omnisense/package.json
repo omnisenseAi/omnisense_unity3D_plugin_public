@@ -4,6 +4,7 @@
     "displayName": "Omnisense AI Bridge",
     "description": "Autonomous AI agent bridge using the Model Context Protocol (MCP).",
     "unity": "2022.3",
+    "license": "MIT",
     "keywords": [
         "ai",
         "mcp",
@@ -11,8 +12,6 @@
         "tool"
     ],
     "author": {
-        "name": "Rahul Bhardwaj",
-        "email": "",
-        "url": ""
+        "name": "Rahul Bhardwaj"
     }
 }
