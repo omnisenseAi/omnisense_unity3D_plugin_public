@@ -77,7 +77,6 @@ namespace Omnisense
         private ModelChatSession _activeSession;
         private List<ModelChatSession> _sessions = new List<ModelChatSession>();
 
-        [MenuItem("Omnisense/3D Model Generator")]
         [MenuItem("Window/Omnisense/3D Model Generator")]
         public static void Open()
         {

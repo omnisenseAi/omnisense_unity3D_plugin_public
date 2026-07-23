@@ -69,7 +69,6 @@ namespace Omnisense
         private Button _tabCommercial;
         private Button _tabSelfhosted;
 
-        [MenuItem("Omnisense/AI Chat")]
         [MenuItem("Window/Omnisense/AI Chat")]
         public static void ShowWindow()
         {
