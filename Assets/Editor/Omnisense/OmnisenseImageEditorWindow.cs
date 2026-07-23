@@ -99,7 +99,6 @@ namespace Omnisense
         private Vector2 _dragStartMousePos;
         private Rect _dragStartCropRect;
 
-        [MenuItem("Omnisense/Image Editor")]
         [MenuItem("Window/Omnisense/Image Editor")]
         public static void Open()
         {

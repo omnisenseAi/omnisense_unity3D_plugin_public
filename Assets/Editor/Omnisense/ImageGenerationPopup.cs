@@ -67,7 +67,6 @@ namespace Omnisense
         private ImageChatSession _activeSession;
         private List<ImageChatSession> _sessions = new List<ImageChatSession>();
 
-        [MenuItem("Omnisense/Image Generator")]
         [MenuItem("Window/Omnisense/Image Generator")]
         public static void Open()
         {
