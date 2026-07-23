@@ -87,6 +87,15 @@ namespace Omnisense
             {
                 visualTree = AssetDatabase.LoadAssetAtPath<VisualTreeAsset>("Packages/com.rahul.omnisense/OmnisenseWindow.uxml");
             }
+            if (visualTree == null)
+            {
+                string[] guids = AssetDatabase.FindAssets("OmnisenseWindow t:VisualTreeAsset");
+                if (guids.Length > 0)
+                {
+                    string path = AssetDatabase.GUIDToAssetPath(guids[0]);
+                    visualTree = AssetDatabase.LoadAssetAtPath<VisualTreeAsset>(path);
+                }
+            }
 
             if (visualTree == null)
             {
@@ -103,6 +112,15 @@ namespace Omnisense
             if (styleSheet == null)
             {
                 styleSheet = AssetDatabase.LoadAssetAtPath<StyleSheet>("Packages/com.rahul.omnisense/OmnisenseWindow.uss");
+            }
+            if (styleSheet == null)
+            {
+                string[] guids = AssetDatabase.FindAssets("OmnisenseWindow t:StyleSheet");
+                if (guids.Length > 0)
+                {
+                    string path = AssetDatabase.GUIDToAssetPath(guids[0]);
+                    styleSheet = AssetDatabase.LoadAssetAtPath<StyleSheet>(path);
+                }
             }
 
             if (styleSheet != null)
